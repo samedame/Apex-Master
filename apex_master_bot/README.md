@@ -25,7 +25,13 @@ Rule: previous VIX close >= 20 and previous-day IBS < 0.10 for SPY, then QQQ, th
 - **Ledger:** `ledger/v2_checks.csv` (every check), `ledger/v2_trades.csv` (paper trades, open to close, net of 2 bp), `state/v2/<date>.json`. Each morning the check first settles earlier signal days from the daily bar, then decides.
 - **Forward-test rules built in:** an alert says PAUSE AND REVIEW if cumulative net return falls below -1,600 bp, and RETIRE if the mean is <= 0 at 40 trades. Do not edit the rule during the test.
 
+**Watchdog (silent days must not hide a dead bot).** `v2-watchdog` runs from its own workflow (`v2-watchdog.yml`, 09:40 ET, independent of the 09:20 dispatch). If today's v2 check is not logged it says so on Discord and runs the check itself (flagged LATE). It also scores any session day the bot missed since the forward test began, so a missed signal still counts and is announced as MISSED SIGNAL. Healthy days are silent. If both the dispatch and GitHub's cron fail, nothing runs; the Friday status line is the backstop.
+
+**Real option quotes on every signal day.** The model-free fair values in the alert are estimates, not prices. On a signal the session dispatches `v2-quotes.yml`, which waits for 09:31 ET, snapshots the same-day (0DTE) chain, builds the three put credit spreads and the call debit spread named in the alert at the strikes the chain actually lists, and posts a QUOTE CHECK: natural fill (sell the bid, buy the ask) versus the empirical fair value, PASS, FAIL, or WIDTH_OFF when the listed strikes are too coarse for the fair value to apply. The fair value is interpolated between the 0.25 and 0.5 sigma widths. Next morning, settlement scores each structure at its intrinsic value at the close, at mid and at the natural fill (`ledger/v2_quotes.csv`, `ledger/v2_quote_results.csv`; summarized in `v2-status`). After about ten signals this shows whether spreads eat the edge. Limits: Yahoo option quotes can be delayed (`snap_et` is when the bot looked), and exits are scored at intrinsic with no exit spread, which flatters the result. Still paper only.
+
 ```
+python3 -m apex_master_bot v2-watchdog --no-notify                    # what the watchdog would do now
+python3 -m apex_master_bot v2-quotes --no-wait --no-notify            # quote snapshot for today's signal, if any
 python3 -m apex_master_bot v2-check --no-notify                       # decide for today (Yahoo + FRED), print only
 python3 -m apex_master_bot v2-check --date 2026-11-05 --no-notify     # a specific session
 python3 -m apex_master_bot v2-status                                  # forward-test summary

@@ -42,6 +42,13 @@ def main(argv=None):
     v.add_argument("--data", help="saved-bars folder instead of Yahoo/FRED (tests, offline)")
     v.add_argument("--no-notify", action="store_true", help="print only, do not post to Discord")
     dirs(v)
+    vw = sub.add_parser("v2-watchdog", help="Master v2: if today's check never ran, say so and run it; score session days the bot missed")
+    vw.add_argument("--date"); vw.add_argument("--data"); vw.add_argument("--no-notify", action="store_true")
+    dirs(vw)
+    vq = sub.add_parser("v2-quotes", help="Master v2: on a signal day, log real option quotes just after the open (paper)")
+    vq.add_argument("--date"); vq.add_argument("--no-notify", action="store_true")
+    vq.add_argument("--no-wait", action="store_true", help="do not wait for 09:31 ET")
+    dirs(vq)
     vs = sub.add_parser("v2-status", help="one-line Master v2 forward-test summary")
     vs.add_argument("--notify", action="store_true")
     dirs(vs)
@@ -89,6 +96,33 @@ def main(argv=None):
         r = v2.run_check(day, prov, a.state_dir, a.ledger_dir, notify)
         print(f"v2 {r['day']}: {r['decision']} - {r.get('reason', '')}")
         # NO_DECISION already alerted Discord; a crash (uncaught exception) is what fails the CI step
+    elif a.cmd == "v2-watchdog":
+        import datetime as dt
+        from . import v2
+        from .live import Notifier
+        day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(v2.NY).date()
+        prov = v2.CsvV2(a.data) if a.data else v2.YahooV2()
+        n = Notifier()
+        res = v2.run_watchdog(day, prov, a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send)
+        print(f"v2 watchdog {day}: ran_today={res['ran_today']} backfilled={res['backfilled']}")
+    elif a.cmd == "v2-quotes":
+        import datetime as dt
+        from . import v2
+        from .live import Notifier
+        from .v2_quotes import YahooChain, run_quotes
+        import json as _j, os as _o
+        day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(v2.NY).date()
+        sf = _o.path.join(a.state_dir, "v2", f"{day.isoformat()}.json")
+        tk = None
+        if _o.path.exists(sf):
+            with open(sf) as _f:
+                _st = _j.load(_f)
+            tk = _st["ticker"] if _st.get("decision") == "TRADE" else None
+        if tk is None:
+            print(f"v2 quotes {day}: no signal today")
+        else:
+            n = Notifier()
+            print("v2 quotes:", run_quotes(day, YahooChain(tk), a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send, wait=not a.no_wait))
     elif a.cmd == "v2-status":
         from . import v2
         from .live import Notifier

@@ -1,0 +1,66 @@
+name: v2-watchdog
+
+# Independent of master-session: if the 09:20 ET dispatch never ran (or the v2 check failed), the silent no-trade
+# days of Master v2 would hide a dead bot. At 09:40 ET this checks that today's v2 check is logged; if not it says so and
+# runs the check itself (flagged LATE), and it scores any earlier session day the bot missed since the forward test began.
+# Both cron lines are needed for DST; before 09:35 ET the command does nothing, so the early one is harmless.
+# GitHub's cron can run late: a late alert still beats none.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "40 13,14 * * 1-5"
+
+concurrency:
+  group: v2-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+    defaults:
+      run:
+        working-directory: apex_master_bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install "pandas==2.3.3" "numpy==2.2.6" yfinance
+
+      - name: v2 watchdog
+        id: wd
+        run: python3 -m apex_master_bot v2-watchdog --state-dir state --ledger-dir ledger
+
+      - name: Save state and ledger back to the repo
+        if: always()
+        working-directory: .
+        run: |
+          git config user.name "apex-master-bot"
+          git config user.email "apex-master-bot@users.noreply.github.com"
+          mkdir -p apex_master_bot/state/v2 apex_master_bot/ledger
+          git add -A apex_master_bot/state/v2 apex_master_bot/ledger
+          if git diff --cached --quiet; then echo "nothing to save"; exit 0; fi
+          git commit -q -m "apex-master v2 watchdog $(TZ=America/New_York date +%F) [skip ci]"
+          for i in 1 2 3 4 5; do
+            git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep $((i * 5))
+          done
+          echo "could not push state after 5 tries"; exit 1
+
+      - name: Alert Discord if the watchdog itself crashed
+        if: failure()
+        run: |
+          [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
+          curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
+            -d "{\"content\":\"APEX MASTER v2 WATCHDOG: the watchdog job FAILED, so a missed v2 check would go unnoticed. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+            "$DISCORD_WEBHOOK_URL" || true

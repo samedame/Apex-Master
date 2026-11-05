@@ -35,6 +35,9 @@ V2 = V2Config()
 # put credit spread, width 0.25 sigma: short strike distance -> (historical win rate, fair credit as share of width)
 PUT_FAIR = {0.50: (0.768, 0.203), 0.75: (0.838, 0.137), 1.00: (0.888, 0.093)}
 CALL_DEBIT_FAIR = {"long at open, width 0.5 sigma": 0.452}
+# same pick days, width 0.5 sigma instead of 0.25 sigma (used to interpolate when the listed strikes force another width)
+PUT_FAIR_W50 = {0.50: 0.170, 0.75: 0.115, 1.00: 0.076}
+CALL_DEBIT_FAIR_W100 = 0.337
 
 
 class DataError(Exception):
@@ -308,6 +311,11 @@ def settle(today: dt.date, provider, state_dir: str, ledger_dir: str, notify, cf
         _append(os.path.join(ledger_dir, "v2_trades.csv"), TRADE_FIELDS,
                 {"day": st["day"], "ticker": st["ticker"], "vix": st["vix"], "ibs": st["ibs"][st["ticker"]], "open": float(r.Open),
                  "close": float(r.Close), "gross_bp": round(gross, 2), "net_bp": round(net, 2), "cum_net_bp": round(cum, 2), "n": n})
+        try:
+            from .v2_quotes import settle_quotes
+            settle_quotes(st["day"], float(r.Close), ledger_dir)
+        except Exception as e:                                   # quote scoring must never block settlement
+            notify(f"APEX MASTER v2: quote scoring error {type(e).__name__}: {str(e)[:120]}")
         st["settled"] = True
         _jdump(st, os.path.join(sd, fn))
         msg = (f"APEX MASTER v2 - paper result {st['day']}: {st['ticker']} open {float(r.Open):.2f} -> close {float(r.Close):.2f}, "
@@ -328,6 +336,7 @@ def run_check(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, n
         settle(day, provider, state_dir, ledger_dir, notify, cfg)
     except Exception as e:                                       # settlement must never block the decision
         notify(f"APEX MASTER v2: settlement error {type(e).__name__}: {str(e)[:160]}")
+    _mark_start(state_dir, day)
     sf = _state_file(state_dir, day.isoformat())
     if os.path.exists(sf):
         prev = _jload(sf)
@@ -354,6 +363,72 @@ def run_check(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, n
     return r
 
 
+# ---------------------------------------------------------------- watchdog: a silent day must never hide a dead bot
+
+WATCHDOG_AFTER = dt.time(9, 35)              # before this the 09:20 dispatch may still be running; do nothing
+
+
+def _mark_start(state_dir: str, day: dt.date):
+    """The forward test starts on the first day the module runs. Backfill never reaches before it."""
+    p = os.path.join(state_dir, "v2", "_start.json")
+    if not os.path.exists(p):
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        _jdump({"start": day.isoformat()}, p)
+
+
+def _start(state_dir: str) -> Optional[dt.date]:
+    p = os.path.join(state_dir, "v2", "_start.json")
+    return dt.date.fromisoformat(_jload(p)["start"]) if os.path.exists(p) else None
+
+
+def prior_sessions(day: dt.date, n: int) -> list:
+    out, d = [], day
+    while len(out) < n:
+        d = expected_prior_session(d)
+        out.append(d)
+    return out
+
+
+def run_watchdog(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, now: Optional[dt.datetime] = None,
+                 lookback: int = 10, cfg: V2Config = V2) -> dict:
+    """If today's check never ran, say so and run it now (flagged LATE). Also score any earlier session days the bot missed,
+    from the start of the forward test, so every signal day counts even if the dispatch failed. Silent when all is well."""
+    now = now or dt.datetime.now(NY)
+    out = {"ran_today": False, "backfilled": []}
+    if now.date() == day and now.time() < WATCHDOG_AFTER:
+        return out
+    start = _start(state_dir)
+    if is_session_day(day):
+        sf = os.path.join(state_dir, "v2", f"{day.isoformat()}.json")
+        ok = os.path.exists(sf) and _jload(sf).get("decision") in ("TRADE", "NO_TRADE")
+        if not ok:
+            notify(f"APEX MASTER v2 WATCHDOG: no v2 check was logged for {day.isoformat()} by {now:%H:%M} ET (the 09:20 run did not happen or failed). Running it now.")
+            run_check(day, provider, state_dir, ledger_dir, notify, now=now, cfg=cfg)
+            out["ran_today"] = True
+            start = start or day
+    if start is None:
+        return out
+    for d in prior_sessions(day, lookback):
+        if d < start:
+            continue
+        sf = os.path.join(state_dir, "v2", f"{d.isoformat()}.json")
+        if os.path.exists(sf):
+            continue
+        try:
+            r = check(d, provider, cfg)
+        except DataError as e:
+            r = {"day": d.isoformat(), "decision": "NO_DECISION", "reason": f"backfill: {e}"}
+        r.update(late=True, backfilled=True)
+        _jdump(r, sf)
+        if r["decision"] != "CLOSED":
+            _append(os.path.join(ledger_dir, "v2_checks.csv"), CHECK_FIELDS,
+                    {**r, "ibs_SPY": r.get("ibs", {}).get("SPY"), "ibs_QQQ": r.get("ibs", {}).get("QQQ"), "ibs_IWM": r.get("ibs", {}).get("IWM"), "late": 1})
+        out["backfilled"].append((d.isoformat(), r["decision"]))
+        if r["decision"] == "TRADE":
+            notify(f"APEX MASTER v2 WATCHDOG: {d.isoformat()} was a MISSED SIGNAL ({r['ticker']}: {r['reason']}). It is scored on paper next, because every signal day counts in the forward test.")
+    return out
+
+
 def status(ledger_dir: str, cfg: V2Config = V2) -> str:
     """One-line forward-test summary (also the weekly heartbeat, since no-trade days are silent)."""
     cp = os.path.join(ledger_dir, "v2_checks.csv")
@@ -368,4 +443,11 @@ def status(ledger_dir: str, cfg: V2Config = V2) -> str:
         base += f", cumulative {tr.net_bp.sum():+.0f} bp, mean {tr.net_bp.mean():+.1f} bp, hit {(tr.net_bp > 0).mean():.0%}"
     else:
         base += f". Quiet is normal: the rule fires about 24 times a year, only when VIX >= {cfg.vix_min:g}."
+    try:
+        from .v2_quotes import quote_summary
+        q = quote_summary(ledger_dir)
+        if q:
+            base += "\n" + q
+    except Exception:
+        pass
     return base
