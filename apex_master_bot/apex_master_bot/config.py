@@ -66,3 +66,13 @@ PROFILES = {
     # runner profile, +2.5R target. Tested: n=57 win 59.6% mean +0.601R PF 2.14
     "runner": replace(Config(), target_R=2.5),
 }
+
+
+def config_hash(cfg: Config) -> str:
+    """Fingerprint of everything that changes which trades are taken or how they are scored. Position size is
+    excluded (it does not change R). The strategy doc says any parameter change restarts the forward-test count."""
+    import dataclasses, hashlib, json
+    d = dataclasses.asdict(cfg)
+    for k in ("risk_pct", "risk_pct_elevated"):
+        d.pop(k, None)
+    return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()[:10]

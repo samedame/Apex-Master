@@ -4,10 +4,11 @@
 Alerts go to the console, logs/alerts.log and, if DISCORD_WEBHOOK_URL is set, to Discord.
 The bot never places orders.
 """
-import csv, datetime as dt, json, math, os, sys, time, urllib.request
+import csv, datetime as dt, json, math, os, sys, time, traceback, urllib.request
 from zoneinfo import ZoneInfo
 import pandas as pd
-from .config import TZ, Config
+from .calendar_et import BASE, HALF_DAYS
+from .config import TZ, Config, config_hash
 from .data import CsvProvider, YahooProvider, vix_prior_close
 from .exits import evaluate
 from .regime import gate
@@ -16,8 +17,7 @@ from .signals import add_indicators, scan_bar, session_cumvols
 
 NY = ZoneInfo(TZ)
 BAR = dt.timedelta(minutes=5)
-HALF_DAYS = {"2026-11-27", "2026-12-24"}          # 13:00 ET closes; the tested pipeline skips sessions < 60 bars
-EVENT_FILE = "event_days.txt"                      # one YYYY-MM-DD per line: FOMC / CPI / NFP / election days (strategy doc: no trade)
+EVENT_FILE = os.path.join(BASE, "event_days.txt")                      # one YYYY-MM-DD per line: FOMC / CPI / NFP / election days (strategy doc: no trade)
 
 
 class RealClock:
@@ -43,7 +43,8 @@ class SimProvider:
 
 
 class Notifier:
-    def __init__(self, log_dir="logs"):
+    def __init__(self, log_dir=None):
+        log_dir = log_dir or os.path.join(BASE, "logs")
         os.makedirs(log_dir, exist_ok=True)
         self.path, self.hook = os.path.join(log_dir, "alerts.log"), os.environ.get("DISCORD_WEBHOOK_URL")
     def send(self, msg, ts=None):
@@ -112,11 +113,29 @@ def run_live(cfg: Config, args):
     def save():
         with open(sp, "w") as f:
             json.dump(st, f, indent=1, default=str)
+    hb_path = os.path.join(state_dir, "heartbeat.json")
+    hb = {"errors_in_row": 0, "error": None, "last_bar": None, "restarts": 0}
+    if os.path.exists(hb_path):
+        try:
+            prev = json.load(open(hb_path))
+            if prev.get("day") == day: hb["restarts"] = prev.get("restarts", 0) + 1
+        except Exception:
+            pass
+
+    def beat(phase, **kw):
+        """Written every loop. The watchdog reads this to tell 'running', 'stalled' and 'finished' apart."""
+        hb.update(ts=clock.now().isoformat(), day=day, pid=os.getpid(), phase=phase, profile_hash=config_hash(cfg), **kw)
+        tmp = hb_path + ".tmp"
+        with open(tmp, "w") as f: json.dump(hb, f)
+        os.replace(tmp, hb_path)
+
     if st["done"]:
         print("already finished today"); return
 
     def stand_down(reason):
-        notifier.send(f"APEX MASTER - NO TRADE TODAY: {reason}", clock.now()); st["done"] = True; save()
+        notifier.send(f"APEX MASTER - NO TRADE TODAY: {reason}", clock.now())
+        st["done"], st["stand_down"], st["outcome"] = True, reason, "stood_down"
+        save(); beat("done")
 
     if day in HALF_DAYS: return stand_down("half-day session (tested pipeline skips sessions under 60 bars)")
     if os.path.exists(EVENT_FILE) and day in {l.strip() for l in open(EVENT_FILE)}:
@@ -133,18 +152,28 @@ def run_live(cfg: Config, args):
                   f"profile target {cfg.target_R:g}R | PAPER ALERTS ONLY", clock.now())
     while clock.now() < open_t: clock.sleep(15)
 
-    while clock.now() < end_t and not st["done"]:
+    beat("armed")
+    ledger_row_cfg = config_hash(cfg)
+
+    def tick():
         now = clock.now()
         try:
             frames = {t: provider.bars(t) for t in cfg.universe}
         except Exception as e:
-            print("data error:", e, file=sys.stderr); clock.sleep(args.poll); continue
+            hb["errors_in_row"] += 1
+            beat("scanning", error=f"data: {type(e).__name__}: {e}"[:300])
+            if hb["errors_in_row"] in (3, 10) or hb["errors_in_row"] % 30 == 0:
+                notifier.send(f"APEX MASTER WARNING - data feed failing ({hb['errors_in_row']} polls in a row): {e}", now)
+            return
         days = {}
         for t, df in frames.items():
             g = df[df.index.date == pd.Timestamp(day).date()]
             if len(g): days[t] = (df, g)
+        spy_last = str(frames["SPY"].index[-1]) if "SPY" in frames and len(frames["SPY"]) else None
+        hb["errors_in_row"] = 0
+        beat("in_trade" if st["trade"] else "scanning", error=None, last_bar=spy_last)
         if not days:
-            clock.sleep(args.poll); continue
+            return
         if st["trade"] is None:
             new = []
             for t, (df, g) in days.items():
@@ -159,18 +188,20 @@ def run_live(cfg: Config, args):
                 st["fired"][t] = sorted(fired)
             for c in new:
                 _append(os.path.join(ledger_dir, "candidates.csv"), {k: c[k] for k in ("date", "ticker", "module", "direction", "ts", "minute", "rvol", "stop_dist")})
-            if new:
-                first_bar = min(c["ts"] for c in new)
-                pick = pick_first_fire([c for c in new if c["ts"] == first_bar], cfg)
-                latest_done = max(int(sum(1 for ts in g.index if ts + BAR <= now)) for _, g in days.values()) - 1
-                if pick and latest_done - pick["bar"] > 1:
+            latest_done = max(int(sum(1 for ts in g.index if ts + BAR <= now)) for _, g in days.values()) - 1
+            # oldest signals first; one that is more than one bar old (bot was down / late) is logged, not chased
+            for ts_group in sorted({c["ts"] for c in new}):
+                pick = pick_first_fire([c for c in new if c["ts"] == ts_group], cfg)
+                if not pick: continue
+                if latest_done - pick["bar"] > 1:
                     notifier.send(f"MISSED (not chased): {pick['ticker']} {pick['module']} signalled {pick['ts'].strftime('%H:%M')} - entry window passed", now)
-                    pick = None
-                if pick:
-                    df, g = days[pick["ticker"]]
-                    entry = float(g["Open"].iloc[pick["bar"] + 1]) if len(g) > pick["bar"] + 1 else pick["signal_close"]
-                    notifier.send(entry_alert(pick, entry, cfg, band, risk_pct, acct), now)
-                    st["trade"] = {**pick, "ts": str(pick["ts"]), "entry": entry, "band": band, "risk_pct": risk_pct}
+                    continue
+                df, g = days[pick["ticker"]]
+                entry = float(g["Open"].iloc[pick["bar"] + 1]) if len(g) > pick["bar"] + 1 else pick["signal_close"]
+                notifier.send(entry_alert(pick, entry, cfg, band, risk_pct, acct), now)
+                st["trade"] = {**pick, "ts": str(pick["ts"]), "entry": entry, "band": band, "risk_pct": risk_pct}
+                st["outcome"] = "open"
+                break
         else:
             tr = st["trade"]; df, g = days[tr["ticker"]]
             gi = add_indicators(g, cfg)
@@ -189,10 +220,25 @@ def run_live(cfg: Config, args):
                 _append(os.path.join(ledger_dir, "trades.csv"), dict(
                     date=day, ticker=tr["ticker"], module=tr["module"], direction=tr["direction"], signal_ts=tr["ts"],
                     minute=tr["minute"], rvol=round(tr["rvol"], 4), entry=round(ex["entry"], 4), stop_dist=round(tr["stop_dist"], 4),
-                    R=round(ex["R"], 4), reason=ex["reason"], bars=ex["bars"], band=tr["band"], risk_pct=tr["risk_pct"]))
-                st["done"] = True
+                    R=round(ex["R"], 4), reason=ex["reason"], bars=ex["bars"], band=tr["band"], risk_pct=tr["risk_pct"],
+                    cfg=ledger_row_cfg, real_cost_R=""))
+                st["done"], st["outcome"] = True, "traded"
+
+    while clock.now() < end_t and not st["done"]:
+        try:
+            tick()
+        except Exception as e:                      # never die silently mid-session: record it, tell the user, keep going
+            hb["errors_in_row"] += 1
+            beat("error", error=f"{type(e).__name__}: {e}"[:300])
+            traceback.print_exc()
+            if hb["errors_in_row"] in (1, 10) or hb["errors_in_row"] % 30 == 0:
+                notifier.send(f"APEX MASTER ERROR in the live loop ({type(e).__name__}: {e}). It keeps retrying; check the logs.", clock.now())
         save()
         clock.sleep(args.poll)
     if st["trade"] is None:
         notifier.send("APEX MASTER - session over, no candidate fired: NO TRADE (a valid outcome).", clock.now())
-    st["done"] = True; save()
+        st["outcome"] = "no_candidate"
+    elif not st["done"]:
+        notifier.send("APEX MASTER WARNING - session ended with the trade still open. Check your position manually.", clock.now())
+        st["outcome"] = "open_at_close"
+    st["done"] = True; save(); beat("done")

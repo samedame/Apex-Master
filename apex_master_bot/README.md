@@ -51,17 +51,29 @@ it is not: `make_final.py` is what produced the numbers. The RVOL > 1.65 veto ca
 
 Also: results are in **underlying R-multiples on 5-minute bars**, not option P&L. The alert gives stop and target levels on the ETF, because that is what was measured.
 
-## Run it live
+## Run it live (hands-off)
 ```
 pip install -r requirements.txt
-export DISCORD_WEBHOOK_URL=...      # optional
-export ACCOUNT_SIZE=25000           # optional, only used to print shares per 1R
-./run_today.sh                      # start at 09:20 ET; a crontab line is in the script header
+touch .env      # then add lines such as:  DISCORD_WEBHOOK_URL=...   ACCOUNT_SIZE=25000   APEX_PROFILE=reliability
+bash schedule/install_launchd.sh        # macOS: installs the bot starter + watchdog, every 5 minutes, survives reboots
 ```
+Linux or other: use `schedule/crontab.example`. Both jobs run at any hour and read the New York clock themselves, so the machine's time zone does not matter.
+The Mac has to be awake during market hours (09:30-16:00 ET = 07:30-14:00 Mountain); `caffeinate` is used while the bot runs, and the installer prints a `pmset` line to wake it.
+
+- **Starter (`run_today.sh`, `ensure`)**: starts the bot on trading days from 09:10 ET if it is not already running. If the bot crashes, the next 5-minute call restarts it and the saved state resumes the session. A signal that fired while it was down is logged as MISSED, never chased.
+- **Watchdog (`watchdog.sh`)**: silent on a healthy day. Alerts to Discord/console if the bot never started, stopped updating, the SPY bar feed is stuck, polls keep failing, or a trade was never closed in the ledger. Posts one line at the end of every day (traded +R / no trade and why) so a dead bot never looks like a quiet day. `market_holidays.txt` lists the closures it should ignore; extend it.
+- **Heartbeat**: `state/heartbeat.json`, rewritten every poll.
 - Risk rules from the document, live only: 0.50% of account at risk per trade (0.25% when the prior VIX is 20-25), no trading after a -3R week (reads `ledger/trades.csv`), no trade on dates in `event_days.txt` (starts empty) or on the half-days 2026-11-27 and 2026-12-24.
-- Signals are only acted on within one bar of firing; later ones are logged as MISSED and not chased.
-- Everything is logged: `ledger/candidates.csv` (every signal), `ledger/trades.csv` (closed trades), `state/<date>.json` (resume after a restart), `logs/alerts.log`.
+- Logs: `ledger/candidates.csv` (every signal), `ledger/trades.csv` (closed trades), `state/<date>.json`, `logs/alerts.log`.
 - Dry run on any saved day: `python3 -m apex_master_bot live --simulate-date 2026-10-29 --data ../data --state-dir /tmp/x --ledger-dir /tmp/x --poll 60`.
+
+## Forward-test scoreboard
+```
+python3 -m apex_master_bot scoreboard            # prints the report and writes ledger/scoreboard.json
+python3 -m apex_master_bot scoreboard --notify   # also posts a one-line summary to Discord (the crontab example does this on Fridays)
+```
+Scores `ledger/trades.csv` against the pass and kill bars registered in section 9 of the strategy document (win >= 60%, PF >= 1.30, mean >= +0.10R with bootstrap CI lower bound > -0.05R, max drawdown >= -8R, no more than 6 losses in a row; killed by PF < 0.90 or mean < -0.10R after 50 trades, real cost > 0.45R, or the gate blocking > 40% of days).
+Each ledger row carries a fingerprint of the settings in force. If you change any rule (target, universe, gate, selection...), only trades under the new settings are counted, which is the document's "any change restarts the count". The verdict stays IN PROGRESS until both 100 trades and 182 days have passed, unless a kill criterion fires first. The real-cost test switches on once the `real_cost_R` column in the ledger is filled by quote logging.
 
 ## What was not tested
 - The Yahoo live feed (`YahooProvider`): the sandbox this was built in could not install or reach `yfinance`. Run one dry day and compare its bars to your broker before trusting it. Yahoo's 5-minute bars can lag, and entry latency matters (the Apex docs put 1 minute of delay at about -19% of the edge).

@@ -1,0 +1,6 @@
+# Linux / any machine with cron. Both jobs run every 5 minutes at any hour; they check the New York clock themselves,
+# so it does not matter what time zone the machine is in. Replace /path/to with your clone.
+*/5 * * * 1-5 /path/to/apex-master/apex_master_bot/run_today.sh >> /path/to/apex-master/apex_master_bot/logs/cron.log 2>&1
+*/5 * * * 1-5 /path/to/apex-master/apex_master_bot/watchdog.sh  >> /path/to/apex-master/apex_master_bot/logs/watchdog.log 2>&1
+# Weekly scoreboard to Discord, Fridays 17:30 machine time:
+30 17 * * 5   cd /path/to/apex-master/apex_master_bot && set -a && . ./.env && set +a && python3 -m apex_master_bot scoreboard --notify >> logs/scoreboard.log 2>&1

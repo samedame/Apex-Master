@@ -1,0 +1,8 @@
+# NYSE full-day closures, one YYYY-MM-DD per line. The scheduler and watchdog stay quiet on these dates.
+# Check against the NYSE calendar and extend as needed (half-days are handled in calendar_et.py).
+2026-11-26   # Thanksgiving
+2026-12-25   # Christmas
+2027-01-01   # New Year's Day
+2027-01-18   # Martin Luther King Jr. Day
+2027-02-15   # Presidents' Day
+2027-03-26   # Good Friday

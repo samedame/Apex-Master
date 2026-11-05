@@ -1,7 +1,11 @@
 #!/bin/bash
-# Schedule at 09:20 America/New_York on weekdays, e.g. crontab (machine clock in ET):
-#   20 9 * * 1-5 /path/to/Apex_Master/apex_master_bot/run_today.sh >> /path/to/Apex_Master/apex_master_bot/logs/cron.log 2>&1
-# Optional env: DISCORD_WEBHOOK_URL (alerts), ACCOUNT_SIZE (shows share count per 1R). Profile: reliability | runner.
+# Scheduler entry point for the bot. Safe to call every 5 minutes at any hour: it only starts the bot when it
+# should be running (trading day, 09:10-15:59 ET, not finished, not already running) and otherwise exits at once.
+# Optional settings go in .env next to this file (never commit it):
+#   DISCORD_WEBHOOK_URL=...   ACCOUNT_SIZE=25000   APEX_PROFILE=reliability   (or runner)
 cd "$(dirname "$0")" || exit 1
 mkdir -p logs state ledger
-exec python3 -m apex_master_bot live --profile "${APEX_PROFILE:-reliability}"
+set -a; [ -f .env ] && . ./.env; set +a
+CMD=(python3 -m apex_master_bot ensure --profile "${APEX_PROFILE:-reliability}")
+# caffeinate (macOS) keeps the Mac awake while the bot runs
+if command -v caffeinate >/dev/null 2>&1; then exec caffeinate -i "${CMD[@]}"; else exec "${CMD[@]}"; fi
