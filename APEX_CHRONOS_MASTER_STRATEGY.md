@@ -6,6 +6,8 @@
 
 > **The honest headline first.** The original Apex Chronos documents are unusually candid: the 21-session backtest (PF 1.86) was fitted on its own data, forward results were statistically indistinguishable from zero, the alert confidence score had AUC 0.49 (no predictive power), and three pre-registered improvement studies all failed. My independent re-backtest confirms the warning: **all five raw modules lose money on fresh 5-minute data (Aug–Nov 2026) before filtering.** The Master below does not "fix" Apex by tuning its thresholds harder — that is exactly what the source docs warn against. It keeps the Apex *entry foundation*, discards what the evidence kills, demotes the rest to fallback, and adds only filters that survived a train/test split, cost stress, and a 36-year regime replication. The result is promising but **not proven**: 57 trades is a small sample. Section 9 is a pre-registered forward test with kill criteria. Do not size this as if it were proven.
 
+> **UPDATE 2026-11-04 (audit).** An independent audit (`research/master_v2/`) found that this document's headline numbers (57 trades, +0.306R, PF 1.74) come from a **hindsight pick**: ranking signals with the whole day's data. The rule the bot can run live (first signal to fire) returns -0.020R, PF 0.97, max DD -12.8R on the reliability profile (+0.165R runner). The RVOL-normalcy ranking, the IBS bonus in calm markets and the VIX >= 25 gate are not supported (section 11). Section 9's forward test is only meaningful for the live first-signal rule, not for the hindsight pick. The candidate that survived testing is Master v2, in `research/master_v2/README.md`.
+
 ---
 
 ## 1. What was kept, killed, and demoted — and why
@@ -218,6 +220,17 @@ The Master is **not approved for live size** on the evidence above. It is approv
 Minimal-diff path from the existing bot: (1) add `bbc_daily.py` PATH A run at 09:20; gate state into the alert header; (2) disable P1A/P1B/P3 emitters (keep code, add `MASTER_DISABLED` flag); (3) restrict universe env to `SPY,QQQ,IWM`; (4) replace candidate ranking (entry-minute → Quality Score §5) and the 3-slot portfolio allocator with a single daily slot that locks on first fill; (5) replace module TP ratios with the R-based exit (R = 0.9·ATR14 computed on 1-min bars live: ATR over 70 1-min bars ≈ one 5-min day-fraction — calibrate once against the 5-min value at 09:45 and log both); (6) add real bid/ask capture at signal/fill/exit to `ledger/trades.csv`; (7) keep the 16:25 reconciliation job and the perturbed-market test harness — they already proved they catch broken bots, which matters more now that ranking logic changed.
 
 ---
+
+## 11. Audit addendum (2026-11-04): what the independent re-test found
+
+Full evidence, code, locked pre-registrations and results: `research/master_v2/`. Net of costs; Holm-corrected; about 130 tests in total.
+
+- **Hindsight pick.** `make_final.py` keeps, per date, the candidate with the best (module priority, |RVOL-1|) among all of that day's signals, including ones that fire later in the session, which a live bot cannot know. The bot's live tie-break is (timestamp, |RVOL-1|). On that rule: reliability -0.020R, PF 0.97, DD -12.8R; runner +0.165R. Unit-matched to basis points of the underlying: hindsight +4.47 (reliability) / +9.58 (runner); live +0.03 / +2.56.
+- **Intraday modules.** Hourly trap fade -2.04 bp (n=1,146), breakout follow +0.21 bp, RVOL-normal minus outside -1.35 bp (wrong sign), late-day momentum about -2 bp gross. A 108-rule scan produced 0 Holm survivors. RVOL-normalcy vs outcome R is null across 777 instrument-sessions (Spearman -0.046 to -0.002).
+- **IBS bonus (hypothesis H3 in section 9).** Wrong-signed in calm markets: IBS < 0.10 with prior VIX < 20 loses 6.3 bp per trade (n=717). It works only when prior VIX >= 20: n=734, +18.19 bp, 95% CI [+5.4, +31.3], hit 56.9%.
+- **Regime gate.** Switching off at VIX >= 25 removes the profitable regime: VIX >= 25 supplied 69.5% of Master v2's profit.
+- **Master v2.** Previous VIX close >= 20 and previous-day IBS < 0.10; first of SPY, QQQ, IWM; long at the open, exit at the close; at most one trade per day (about 24 a year, none in calm markets). Evidence is 30 years of daily bars, not 5-minute bars, so the intraday window here cannot validate it (1 pick day with VIX >= 20). The VIX split was found post hoc and pre-registered afterwards on the same history: plan on about half the edge (about +9 bp). Option P&L is unverified.
+- **Forward-test hypotheses that moved.** H1 (QQQ/IWM-only beats SPY-included): for v2, IWM-triggered trades averaged -10.4 bp (n=112) vs +23.3 bp for SPY/QQQ (n=622); post hoc, not acted on. H3 as above.
 
 ### Sources
 - User-supplied: *Apex Chronos Strategy Summary* (2026-11-04) and *MASTER_PROMPT_REGIME v4 / Daily Regime Prompt* (2026-11-03), including `bbc_daily.py` and its frozen 1996–2026 lookup tables.

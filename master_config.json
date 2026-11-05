@@ -11,5 +11,25 @@
   "quality_score_min": 60,
   "exit": {"R_definition": "0.9*ATR14_5m_at_signal", "stop": "-1.0R on bar close, no resting broker stop", "target_R": 1.2, "runner_target_R": 2.5, "max_hold_minutes": 100, "hard_flat": "15:55 ET"},
   "risk": {"risk_per_trade_pct_account": 0.5, "elevated_regime_pct": 0.25, "weekly_stop_R": -3},
-  "forward_test": {"trades_required": 100, "pass": "win>=60%, PF>=1.30 after real costs, mean>=+0.10R, maxDD>=-8R"}
+  "forward_test": {"trades_required": 100, "pass": "win>=60%, PF>=1.30 after real costs, mean>=+0.10R, maxDD>=-8R"},
+  "evidence_status": {
+    "audited": "2026-11-04",
+    "v1_published_numbers_basis": "hindsight pick (whole-day ranking), 57 trades over 60 sessions",
+    "v1_live_rule_first_fire": {"reliability_mean_R": -0.020, "reliability_pf": 0.97, "reliability_max_dd_R": -12.8, "runner_mean_R": 0.165},
+    "unsupported_components": ["rvol_closest_to_1_ranking", "ibs_bonus_when_vix_below_20", "vix_hard_cap_25_gate"],
+    "details": "research/master_v2/README.md"
+  },
+  "v2_candidate": {
+    "name": "Apex Master v2 (regime-gated IBS dip-buy)",
+    "status": "forward-test candidate, not proven; paper only",
+    "universe_order": ["SPY","QQQ","IWM"],
+    "gate": {"prior_close_vix_min": 20, "prior_close_vix_max": null},
+    "signal": {"prior_day_ibs_below": 0.10, "ibs": "(close-low)/(high-low)"},
+    "entry": "long at the open", "exit": "close of the same session", "max_trades_per_day": 1,
+    "assumed_cost_bp_round_trip": 2,
+    "backtest_1993_2026": {"n": 734, "per_year": 24.2, "net_bp_per_trade": 18.19, "ci95_bp": [5.4, 31.3], "hit": 0.569, "pf": 1.33, "max_dd_bp": -4506},
+    "planning_haircut": "about 50% of in-sample edge (about +9 bp/trade)",
+    "forward_test": {"pause_if_cum_net_bp_below": -1600, "retire_at_trades": 40, "retire_if_mean_net_bp_at_or_below": 0, "test_iwm_exclusion_once_at_trades": 40},
+    "details": "research/master_v2/README.md"
+  }
 }

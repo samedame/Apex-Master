@@ -6,6 +6,8 @@ Built from `APEX_CHRONOS_MASTER_STRATEGY.md` and the code in `../backtest/`. Eve
 
 **The bot sends paper alerts only. It never places an order.**
 
+> **Audit note (2026-11-04).** This bot replays the tested v1 pipeline exactly, but the published 57-trade numbers rest on a hindsight pick; the live first-signal rule is about flat (-0.020R reliability, +0.165R runner). The bot is unchanged and still alerts only. See `../research/master_v2/README.md` for the audit and the v2 candidate (not built into this bot).
+
 ## What it does (exactly as tested)
 - Universe SPY, QQQ, IWM. 5-minute bars, 09:30-15:55 ET. Modules **P1C** (ORB-15 trap reject, primary) and **P2** (midday range-wall pin, fallback). P1A, P1B, P3 are not built.
 - Each module fires at most once per ticker per day. At most one trade per day.
