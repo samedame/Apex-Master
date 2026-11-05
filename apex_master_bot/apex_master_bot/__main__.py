@@ -37,6 +37,17 @@ def main(argv=None):
     sc = sub.add_parser("scoreboard", help="score the forward test against the strategy document's pass and kill bars")
     sc.add_argument("--notify", action="store_true", help="also post a one-line summary to Discord")
     dirs(sc)
+    v = sub.add_parser("v2-check", help="Master v2 pre-open check (paper alert): settles earlier signals, then decides for today")
+    v.add_argument("--date", help="YYYY-MM-DD session to decide for (default: today, ET)")
+    v.add_argument("--data", help="saved-bars folder instead of Yahoo/FRED (tests, offline)")
+    v.add_argument("--no-notify", action="store_true", help="print only, do not post to Discord")
+    dirs(v)
+    vs = sub.add_parser("v2-status", help="one-line Master v2 forward-test summary")
+    vs.add_argument("--notify", action="store_true")
+    dirs(vs)
+    vr = sub.add_parser("v2-replay", help="re-run the Master v2 rule on saved daily bars and compare with the research trade list")
+    vr.add_argument("--data", required=True, help="folder with SPY_1d.csv QQQ_1d.csv IWM_1d.csv VIX_1d.csv")
+    vr.add_argument("--published", help="research/master_v2/results/master_v2_trades.csv")
     a = ap.parse_args(argv)
     if a.cmd == "replay":
         cfg = PROFILES[a.profile]
@@ -63,6 +74,38 @@ def main(argv=None):
     elif a.cmd == "discord-test":
         from .live import discord_test
         sys.exit(0 if discord_test() else 1)
+    elif a.cmd == "v2-check":
+        import datetime as dt
+        from . import v2
+        from .live import Notifier
+        day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(v2.NY).date()
+        prov = v2.CsvV2(a.data) if a.data else v2.YahooV2()
+        n = Notifier()
+        def notify(m):
+            if a.no_notify:
+                print(m + "\n")
+            else:
+                n.send(m)
+        r = v2.run_check(day, prov, a.state_dir, a.ledger_dir, notify)
+        print(f"v2 {r['day']}: {r['decision']} - {r.get('reason', '')}")
+        # NO_DECISION already alerted Discord; a crash (uncaught exception) is what fails the CI step
+    elif a.cmd == "v2-status":
+        from . import v2
+        from .live import Notifier
+        line = v2.status(a.ledger_dir)
+        if a.notify:
+            Notifier().send(line)
+        else:
+            print(line)
+    elif a.cmd == "v2-replay":
+        from . import v2
+        t = v2.replay(a.data)
+        print(f"v2 replay: n={len(t)} mean net {t.net_bp.mean():+.2f} bp hit {(t.net_bp > 0).mean():.3f} sum {t.net_bp.sum():+.0f} bp")
+        if a.published:
+            p = pd.read_csv(a.published)
+            same = len(t) == len(p) and (t.date.values == p.date.astype(str).values).all() and (t.ticker.values == p.ticker.values).all()
+            print("matches published trade list (dates, tickers):", same,
+                  "| max |net_bp diff|:", float((t.net_bp.values - p.net_bp.values).__abs__().max()) if same else "n/a")
     elif a.cmd == "scoreboard":
         from . import scoreboard
         scoreboard.run(a.ledger_dir, a.state_dir, a.notify)

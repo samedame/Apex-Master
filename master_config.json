@@ -21,7 +21,7 @@
   },
   "v2_candidate": {
     "name": "Apex Master v2 (regime-gated IBS dip-buy)",
-    "status": "forward-test candidate, not proven; paper only",
+    "status": "forward-test candidate, not proven; paper only; alert module apex_master_bot/apex_master_bot/v2.py",
     "universe_order": ["SPY","QQQ","IWM"],
     "gate": {"prior_close_vix_min": 20, "prior_close_vix_max": null},
     "signal": {"prior_day_ibs_below": 0.10, "ibs": "(close-low)/(high-low)"},

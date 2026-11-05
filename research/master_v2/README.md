@@ -72,6 +72,8 @@ Model-free option fair values on pick days (strikes from the open, sigma = previ
 
 ## Forward-test plan (proposal, not backtested)
 
+Built into the bot as `python3 -m apex_master_bot v2-check` (alert-only, `apex_master_bot/apex_master_bot/v2.py`); see the bot README.
+
 Paper-trade every signal day with the ETF as the record; log the live option credit or debit beside it. Pause if forward cumulative net return falls below -1,600 bp (about 2 sd of a 20-trade run). Retire at 40 trades if the mean is at or below zero. Test the IWM exclusion once at 40 trades. No rule edits during the test.
 
 ## Reproduce

@@ -6,7 +6,7 @@ Built from `APEX_CHRONOS_MASTER_STRATEGY.md` and the code in `../backtest/`. Eve
 
 **The bot sends paper alerts only. It never places an order.**
 
-> **Audit note (2026-11-04).** This bot replays the tested v1 pipeline exactly, but the published 57-trade numbers rest on a hindsight pick; the live first-signal rule is about flat (-0.020R reliability, +0.165R runner). The bot is unchanged and still alerts only. See `../research/master_v2/README.md` for the audit and the v2 candidate (not built into this bot).
+> **Audit note (2026-11-04).** The v1 pipeline below replays the tested rules exactly, but the published 57-trade numbers rest on a hindsight pick; the live first-signal rule is about flat (-0.020R reliability, +0.165R runner). v1 is unchanged. The v2 candidate that survived the audit runs beside it as a separate alert-only module: see "Master v2 alerts" below and `../research/master_v2/README.md`.
 
 ## What it does (exactly as tested)
 - Universe SPY, QQQ, IWM. 5-minute bars, 09:30-15:55 ET. Modules **P1C** (ORB-15 trap reject, primary) and **P2** (midday range-wall pin, fallback). P1A, P1B, P3 are not built.
@@ -15,6 +15,23 @@ Built from `APEX_CHRONOS_MASTER_STRATEGY.md` and the code in `../backtest/`. Eve
 - Entry: open of the bar after the signal bar. `R = max(0.9 x ATR14, close x 0.0008)`.
 - Exit (profile `reliability`, the adopted one): target +1.2R on a bar high/low touch, stop -1R on a bar **close** only, time exit after 20 bars (100 min). 0.15R cost on every trade. Profile `runner` uses +2.5R.
 - VIX gate: no trade if the prior-day VIX close is 25 or higher (`master_config.json`). It never fires in the tested sample, so it does not change any tested result (checked by a test).
+
+## Master v2 alerts (added 2026-11-04, paper alerts only)
+Rule: previous VIX close >= 20 and previous-day IBS < 0.10 for SPY, then QQQ, then IWM (first one wins). Buy at the open, sell at the close, at most one trade a day. Evidence and limits: `../research/master_v2/README.md` (+18.19 bp per trade over 30 years, about 24 trades a year, plan on about half of that, unproven out of sample, option P&L unverified). **It sends no orders.**
+
+- **When:** a pre-open step at the start of `master-session` (the 09:20 ET run) calls `v2-check`. It uses only the previous session's bars, so there is nothing to watch intraday. A v2 failure never blocks the v1 session.
+- **Alerts:** Discord only when a trade qualifies (ticker, IBS, VIX, sigma, candidate option strikes and their empirical fair values). No-trade days are silent. Any data problem sends a loud `NO DECISION` message with the manual rule. Fridays post a one-line weekly status as a heartbeat.
+- **Data guards:** the previous-session bar must exist for SPY, QQQ, IWM and VIX (no stale data). VIX is cross-checked against FRED VIXCLS; if the two disagree across the 20 gate there is no decision.
+- **Ledger:** `ledger/v2_checks.csv` (every check), `ledger/v2_trades.csv` (paper trades, open to close, net of 2 bp), `state/v2/<date>.json`. Each morning the check first settles earlier signal days from the daily bar, then decides.
+- **Forward-test rules built in:** an alert says PAUSE AND REVIEW if cumulative net return falls below -1,600 bp, and RETIRE if the mean is <= 0 at 40 trades. Do not edit the rule during the test.
+
+```
+python3 -m apex_master_bot v2-check --no-notify                       # decide for today (Yahoo + FRED), print only
+python3 -m apex_master_bot v2-check --date 2026-11-05 --no-notify     # a specific session
+python3 -m apex_master_bot v2-status                                  # forward-test summary
+python3 -m apex_master_bot v2-replay --data ../research/master_v2/data --published ../research/master_v2/results/master_v2_trades.csv
+```
+`v2-replay` re-runs the same `decide()` the live check uses over 30 years of daily bars and matches all 734 published trades (a test asserts it). To run it outside GitHub Actions, schedule `v2-check` once each weekday at about 09:15 ET (it needs `pip install yfinance`).
 
 ## Proof it matches the backtest
 ```
