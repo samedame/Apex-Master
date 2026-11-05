@@ -1,0 +1,2 @@
+day,decision,ticker,vix,vix_source,ibs_SPY,ibs_QQQ,ibs_IWM,reason,late
+2026-11-05,NO_TRADE,,16.610000610351562,Yahoo only (FRED not yet posted),0.32076791616586536,0.3004427065776759,0.5576095897722492,"VIX 16.61 < 20: calm-market regime, the signal loses money here",0
