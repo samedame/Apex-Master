@@ -294,7 +294,10 @@ class ActionsPieces(Tmp):
             if old: os.environ["DISCORD_WEBHOOK_URL"] = old
 
     def test_workflows_are_dispatchable_with_the_scheduler_inputs(self):
-        import yaml
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML not installed")
         wf = os.path.join(ROOT, "..", ".github", "workflows", "master-session.yml")
         y = yaml.safe_load(open(wf))
         on = y.get(True) or y.get("on")

@@ -16,6 +16,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "pandas==2.3.3" "numpy==2.2.6"
+      - run: pip install "pandas==2.3.3" "numpy==2.2.6" pyyaml
       - name: Replay parity, exits, live loop, scoreboard, watchdog, scheduler
         run: python3 -m unittest discover -s tests -v

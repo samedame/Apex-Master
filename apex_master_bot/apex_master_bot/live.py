@@ -99,6 +99,11 @@ def entry_alert(c, entry, cfg, band, risk_pct, acct):
             f"{size}\nNOTE: levels are on the underlying ETF - that is what was backtested.")
 
 
+def _event_days():
+    with open(EVENT_FILE) as f:
+        return {l.strip() for l in f}
+
+
 def run_live(cfg: Config, args):
     sim = bool(getattr(args, "simulate_date", None))
     if sim:
@@ -143,7 +148,7 @@ def run_live(cfg: Config, args):
         save(); beat("done")
 
     if day in HALF_DAYS: return stand_down("half-day session (tested pipeline skips sessions under 60 bars)")
-    if os.path.exists(EVENT_FILE) and day in {l.strip() for l in open(EVENT_FILE)}:
+    if os.path.exists(EVENT_FILE) and day in _event_days():
         return stand_down("event day listed in event_days.txt")
     vix_prev = vix_prior_close(provider.vix_daily(), day)
     ok, band, why = gate(vix_prev, cfg.vix_prior_cap)
