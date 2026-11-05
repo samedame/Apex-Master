@@ -7,8 +7,9 @@ open-to-close moves, not market prices. This module measures the gap between the
   3. the next morning, settlement computes each structure's intrinsic P&L at the close, at mid and at the natural fill.
 After about ten signals this shows whether spreads eat the edge. Paper only: the bot never places orders.
 
-Limits, stated plainly: Yahoo option quotes can be delayed, so `snap_et` is when the bot looked, not necessarily the quote
-time. Exits are scored at intrinsic value at the close (no exit spread), which flatters the result a little.
+Limits, stated plainly: with a Tradier production key the chain is real time; without one (or if Tradier fails) it falls back
+to Yahoo, whose option quotes can be delayed, so `snap_et` is when the bot looked, not necessarily the quote time. The alert
+says which source it used. Exits are scored at intrinsic value at the close (no exit spread), which flatters the result a little.
 """
 import csv, datetime as dt, math, os, time
 from typing import Callable, Dict, List, Optional
@@ -53,6 +54,93 @@ class YahooChain:
         idx = pd.to_datetime(h.index)
         h = h[[i.date() == day for i in idx]]
         return float(h.Open.iloc[0]) if len(h) else None
+
+
+class TradierChain:
+    """Same interface as YahooChain, read from Tradier: real bid/ask. A production key is real time; a sandbox key is
+    about 15 minutes delayed and says so in `label`."""
+
+    def __init__(self, ticker: str):
+        from . import tradier
+        self.tr = tradier
+        self.ticker = ticker.upper()
+        self.label = "Tradier sandbox (about 15 min delayed)" if tradier.is_delayed() else "Tradier production (real time)"
+
+    def expiries(self) -> List[str]:
+        return list(self.tr.expirations(self.ticker))
+
+    def _side(self, expiry: str, kind: str) -> pd.DataFrame:
+        rows = [{"strike": o.get("strike"), "bid": o.get("bid"), "ask": o.get("ask")}
+                for o in self.tr.chain(self.ticker, expiry, greeks=False) if o.get("option_type") == kind]
+        return pd.DataFrame(rows, columns=["strike", "bid", "ask"])
+
+    def puts(self, expiry: str) -> pd.DataFrame:
+        return self._side(expiry, "put")
+
+    def calls(self, expiry: str) -> pd.DataFrame:
+        return self._side(expiry, "call")
+
+    def open_price(self, day: dt.date) -> Optional[float]:
+        """Open of the 09:30 one-minute bar (regular session only)."""
+        bars = self.tr.timesales(self.ticker, f"{day.isoformat()} 09:30", f"{day.isoformat()} 09:31")
+        for b in bars:
+            if str(b.get("time", "")).startswith(f"{day.isoformat()}T09:30") and b.get("open") is not None:
+                return float(b["open"])
+        return float(bars[0]["open"]) if bars and bars[0].get("open") is not None else None
+
+
+class FallbackChain:
+    """Tradier first; if Tradier raises or comes back empty for a call, that call is answered by Yahoo instead.
+    `label` names the source(s) actually used so the alert never overstates how fresh the quotes are."""
+
+    def __init__(self, primary, backup_factory: Callable[[], object], log: Callable[[str], None] = print):
+        self.primary, self._backup_factory, self._backup, self._log = primary, backup_factory, None, log
+        self.used_backup = False
+
+    @property
+    def label(self) -> str:
+        return (self.primary.label + "; some calls fell back to Yahoo (may be delayed)") if self.used_backup else self.primary.label
+
+    def _backup_chain(self):
+        if self._backup is None:
+            self._backup = self._backup_factory()
+        return self._backup
+
+    def _go(self, name: str, *args):
+        try:
+            out = getattr(self.primary, name)(*args)
+            empty = out is None or (hasattr(out, "empty") and out.empty) or (isinstance(out, list) and not out)
+            if not empty:
+                return out
+            why = "empty answer"
+        except Exception as e:      # noqa: BLE001 -- anything Tradier does wrong falls back; it must never cost the check
+            why = f"{type(e).__name__}: {str(e)[:100]}"
+        self._log(f"[data] Tradier {name}{args}: {why}; using Yahoo")
+        self.used_backup = True
+        return getattr(self._backup_chain(), name)(*args)
+
+    def expiries(self):
+        return self._go("expiries")
+
+    def puts(self, expiry):
+        return self._go("puts", expiry)
+
+    def calls(self, expiry):
+        return self._go("calls", expiry)
+
+    def open_price(self, day):
+        return self._go("open_price", day)
+
+
+YahooChain.label = "Yahoo (may be delayed)"
+
+
+def make_chain(ticker: str):
+    """Tradier-first chain when a key is configured (TRADIER_API_KEY), otherwise exactly the old Yahoo behaviour."""
+    from . import tradier
+    if tradier.configured():
+        return FallbackChain(TradierChain(ticker), lambda: YahooChain(ticker))
+    return YahooChain(ticker)
 
 
 # ---------------------------------------------------------------- structures
@@ -219,11 +307,12 @@ def run_quotes(day: dt.date, chain, state_dir: str, ledger_dir: str, notify: Cal
                          "spot_open": round(spot, 2), "sigma_usd": round(sigma, 3), "gate": s["gate"] if is0 else "N/A"})
             st["quotes_logged"] = True
             _jdump(st, sf)
-            notify(quote_message(day.isoformat(), ticker, spot, sigma, expiry, is0, rows))
+            src = getattr(chain, "label", "")
+            notify(quote_message(day.isoformat(), ticker, spot, sigma, expiry, is0, rows, note=f"Data: {src}." if src else ""))
             return "done"
         if i + 1 < attempts:
             sleeper(retry_s)
-    notify(f"APEX MASTER v2 - QUOTE CHECK {day.isoformat()} {ticker}: no live option quotes after {attempts} tries (Yahoo may be delayed or the chain empty). "
+    notify(f"APEX MASTER v2 - QUOTE CHECK {day.isoformat()} {ticker}: no live option quotes after {attempts} tries (data source: {getattr(chain, 'label', 'unknown')}; the chain may be empty). "
            f"Read the live chain by hand and compare with the fair values in the alert; log your fill.")
     return "no-quotes"
 

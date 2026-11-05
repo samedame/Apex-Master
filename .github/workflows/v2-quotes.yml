@@ -19,6 +19,9 @@ jobs:
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       PYTHONUNBUFFERED: "1"
+      # Optional real-time option quotes. Unset = Yahoo exactly as before. A production key makes Tradier the first source.
+      TRADIER_API_KEY: ${{ secrets.TRADIER_API_KEY }}
+      TRADIER_BASE_URL: ${{ secrets.TRADIER_BASE_URL }}
     defaults:
       run:
         working-directory: apex_master_bot

@@ -109,7 +109,7 @@ def main(argv=None):
         import datetime as dt
         from . import v2
         from .live import Notifier
-        from .v2_quotes import YahooChain, run_quotes
+        from .v2_quotes import make_chain, run_quotes
         import json as _j, os as _o
         day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(v2.NY).date()
         sf = _o.path.join(a.state_dir, "v2", f"{day.isoformat()}.json")
@@ -122,7 +122,7 @@ def main(argv=None):
             print(f"v2 quotes {day}: no signal today")
         else:
             n = Notifier()
-            print("v2 quotes:", run_quotes(day, YahooChain(tk), a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send, wait=not a.no_wait))
+            print("v2 quotes:", run_quotes(day, make_chain(tk), a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send, wait=not a.no_wait))
     elif a.cmd == "v2-status":
         from . import v2
         from .live import Notifier
