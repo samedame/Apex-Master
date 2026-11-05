@@ -1,0 +1,414 @@
+<!doctype html><html><head><meta charset='utf-8'><style>
+body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:32px auto;padding:0 20px;line-height:1.55;color:#1a1a1a}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:12px 0} th,td{border:1px solid #ccc;padding:6px;text-align:left} th{background:#111;color:#fff}
+code,pre{background:#f4f4f4;padding:2px 4px;font-size:12px} pre{padding:12px;overflow:auto} blockquote{border-left:4px solid #c0392b;padding-left:12px;background:#fdf2f2}
+h1{line-height:1.2} img{max-width:100%}
+</style></head><body><h1>APEX CHRONOS MASTER — One Maximally Reliable Trade Per Day</h1>
+<p><strong>Version:</strong> Master v1.0 — 2026-11-04
+<strong>Lineage:</strong> Apex Chronos (5 intraday options modules, 12 tickers, 1-minute bars) × Daily Regime Engine v4 (1990–2026, volatility/magnitude — <em>not</em> direction) + outside validated indicators
+<strong>Mandate:</strong> At most <strong>one</strong> trade per day. No trade is a valid, common outcome. Reliability (win consistency, shallow drawdown, survival after costs) is optimised ahead of raw profit.</p>
+<blockquote>
+<p><strong>The honest headline first.</strong> The original Apex Chronos documents are unusually candid: the 21-session backtest (PF 1.86) was fitted on its own data, forward results were statistically indistinguishable from zero, the alert confidence score had AUC 0.49 (no predictive power), and three pre-registered improvement studies all failed. My independent re-backtest confirms the warning: <strong>all five raw modules lose money on fresh 5-minute data (Aug–Nov 2026) before filtering.</strong> The Master below does not "fix" Apex by tuning its thresholds harder — that is exactly what the source docs warn against. It keeps the Apex <em>entry foundation</em>, discards what the evidence kills, demotes the rest to fallback, and adds only filters that survived a train/test split, cost stress, and a 36-year regime replication. The result is promising but <strong>not proven</strong>: 57 trades is a small sample. Section 9 is a pre-registered forward test with kill criteria. Do not size this as if it were proven.</p>
+</blockquote>
+<hr />
+<h2>1. What was kept, killed, and demoted — and why</h2>
+<table>
+<thead>
+<tr>
+<th>Apex module</th>
+<th>Original role</th>
+<th>Evidence (my 5m re-backtest, 1,385 candidates)</th>
+<th>Master verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>P1C ORB15 Trap Reject</strong></td>
+<td>Put debit spread on failed ORB poke</td>
+<td>Least-bad raw module (−0.04R/candidate at Apex exits). On index ETFs with Master exit: <strong>positive in both halves</strong> (+0.15R train / +0.06R test at 1.8R; stronger at 1.2R — §7)</td>
+<td><strong>PRIMARY — the core of the Master</strong></td>
+</tr>
+<tr>
+<td><strong>P2 Midday Range-Wall Pin</strong></td>
+<td>Credit spread against range-wall rejection</td>
+<td>Raw −0.14R at Apex exits, but <strong>+0.12R drift to close</strong> — consistent with a <em>credit-spread/theta</em> payoff, not a directional one (matches source doc: "roughly zero expected return")</td>
+<td><strong>FALLBACK only</strong> — traded only when no P1C exists (4 of 57 Master days); keep original credit-spread structure, never convert to directional debit</td>
+</tr>
+<tr>
+<td><strong>P1A Gap-Trap Sweep</strong></td>
+<td>Single option fading the gap</td>
+<td>−0.25R/candidate, 41% win; time exits dominate (TP 90%/stop 26% ≈ 3.5R almost never reached); the source doc's own note says its early edge decayed −2.3% off core tickers</td>
+<td><strong>KILLED as a standalone.</strong> Gap-trap logic is absorbed into P1C (a trap <em>is</em> a failed-breakout fade, with a cleaner trigger)</td>
+</tr>
+<tr>
+<td><strong>P1B Confirmed Gap + ORB15</strong></td>
+<td>Call debit spread on confirmed breakout</td>
+<td>−0.18R/candidate, both halves ≈ −0.18R; breakout-confirmation entries chase. Outside replication research is similarly sceptical of plain ORB breakout profitability</td>
+<td><strong>KILLED.</strong> Retained in code (<code>P1B</code> flag) as a <em>do-not-trade</em> marker: a confirmed 3-close ORB breakout against a candidate P1C short/long is a veto (don't fade strength)</td>
+</tr>
+<tr>
+<td><strong>P3 Afternoon Vanna Squeeze</strong></td>
+<td>Call debit spread on oversold reclaim</td>
+<td>Worst module: −0.34R, deteriorating out-of-sample (−0.18R → −0.48R)</td>
+<td><strong>KILLED.</strong> Its one useful idea — oversold reclaim — is replaced by the validated IBS/RSI(2) oversold <em>context</em> (§3), not an afternoon lottery ticket</td>
+</tr>
+<tr>
+<td>Alert confidence score (1–100)</td>
+<td>Rank alerts</td>
+<td>AUC 0.49, Spearman ≈ 0 in the source docs. It ranked <em>execution quality</em>, not edge</td>
+<td><strong>REPLACED</strong> by the Master Quality Score (§5), built only from factors that separated winners in the backtest. It is a <em>ranking</em> score, explicitly <strong>not</strong> a win probability</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Universe change (evidence-driven):</strong> the Master trades <strong>SPY, QQQ, IWM only</strong>. Single names were worse across every module in the re-backtest (−0.19R vs −0.15R per candidate, and the worst tickers — COIN, MSFT, NVDA, SPY-underlying — dragged), single-name 0DTE existence was already flagged "unverified" in Apex, and the trap effect is an index mean-reversion phenomenon (IBS literature finds it in broad indices, not single names). <em>Post-hoc warning:</em> within the index trio, SPY contributed least (+0.02R/trade) vs QQQ (+0.22R) and IWM (+0.63R) at the Master exit. Excluding SPY would lift PF to ~2.6 — <strong>I have NOT adopted that exclusion</strong>, because picking it after seeing this sample is precisely the data-snooping the Apex verdict docs (IWM study, 11-04) warn about. It is logged as Hypothesis H1 for the forward test, nothing more.</p>
+<hr />
+<h2>2. The Master in one page</h2>
+<pre><code>PRE-MARKET (by 09:25 ET) — Regime Engine v4, PATH A calculator (bbc_daily.py)
+  Compute: Bull/Bear (base-rate only), Fear Gauge, VIX-base Risk Regime + downgrades
+           (VIX&gt;VIX3M · SPX&lt;200d · Baa-10Y widening · event &lt;24h), Expected Move, IBS prior day
+  GATE:  Final regime HIGH or STRESS  → NO TRADE TODAY. Full stop.
+         ELEVATED → trade allowed at HALF size.  CALM/NORMAL → full size.
+         FOMC/CPI/NFP/election result today → NO TRADE (hard override, from v4 posture table)
+
+INTRADAY (09:30–14:00 ET decision window) — Apex foundation, 1-min live (5-min in backtest)
+  1. Build OR15 (09:30–09:45 high/low), VWAP, EMA9/21, ATR14, RVOL (cum. volume vs prior-20-day
+     mean cumulative volume at the same intraday slot — proper RVOL, not bar/median proxy)
+  2. Scan SPY/QQQ/IWM for P1C trap candidates (primary) and P2 wall-pins (fallback):
+       P1C long : poke below OR15 low, then a green bar closing back above OR15 low AND above EMA9
+       P1C short: poke above OR15 high, then a red bar closing back below OR15 high AND below
+                  EMA9, close not more than 0.2% below VWAP (unchanged from Apex)
+       P2       : rejection candle at the 75-minute high/low (Apex definition, unchanged)
+     Each module fires at most once per ticker per day (Apex rule, unchanged)
+  3. VETOES (any one kills a candidate):
+       · P1B-style confirmed breakout in the candidate's direction within the last 3 bars
+         (3 closes beyond OR15 against the fade) — never fade confirmed strength
+       · RVOL &gt; 1.65 (climax volume — traps on climax volume fail; see §4)
+       · Candidate ticker is a single name (universe rule)
+       · SPY intraday direction is accelerating away from the trap (SPY 15-min EMA slope
+         beyond ±0.15% against the trade) — the &quot;catching a knife&quot; veto
+  4. RANK all surviving candidates by Master Quality Score (§5). Take the TOP ONE only.
+     Tie-break / core of the score: the candidate whose RVOL is closest to 1.00.
+  5. If nothing survives → NO TRADE. Log the near-misses.
+
+EXECUTION &amp; EXIT (the backtested profile — §7)
+  Instrument : P1C → debit spread in the trap direction (put spread for short, call spread for
+               long), strikes ≈ 0.58Δ / 0.28Δ as per Apex P1B/P1C convention, nearest expiry
+               with verified open interest (index ETFs only — 0DTE existence is real here)
+               P2 → defined-risk credit spread, Apex strikes (0.32Δ/0.10Δ), unchanged
+  Entry      : next bar after the signal bar (live: act within 1–2 minutes — Apex sensitivity
+               study: 1-min delay ≈ −19% of edge, 3-min delay flips forward results negative)
+  Stop       : −1.00R, where R = 0.9 × ATR14 (5-min) at signal. Checked on bar CLOSE, never a
+               resting broker stop (Apex finding: intrabar stops flip PF 1.16 → 0.75)
+  Target     : +1.20R. At target, exit in full (Master reliability profile).
+               [Optional runner profile: +2.50R target — PF 2.14 vs 1.74, win 59.6% vs 70.2%,
+                max drawdown −6.2R vs −3.5R. Pick ONE profile in advance; do not mix.]
+  Time exit  : 100 minutes (20 × 5-min bars) at market, or 15:55 ET, whichever first
+  Costs      : backtest already deducts 0.15R/trade; strategy survives +0.30R extra (PF 1.01 →
+               see stress table, §8) — if your real round-trip cost exceeds that, do not trade it
+
+RISK
+  0.50% of account at risk per trade (R = dollar risk), half size (0.25%) in ELEVATED regime
+  Hard daily stop: after the one trade, done — win or lose. Weekly stop: −3R → flat until Monday
+  This replaces Apex's &quot;3 slots × 25% of account in 0DTE&quot; — the source doc itself calls that
+  sizing unjustified by the evidence, and the Master sample does not justify it either.
+</code></pre>
+<hr />
+<h2>3. The Regime layer — what it is allowed to do (and what it is forbidden to do)</h2>
+<p>The Regime Engine v4 backtest (1990–2026, 7,773 scored sessions, pre-registered) proved a sharp split, which I <strong>replicated independently</strong> on SPX/VIX daily data (1991–2026, 9,025 sessions; <code>backtest/regime_long.py</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Claim</th>
+<th>Source doc</th>
+<th>My replication</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Direction: no input beats the 64% base rate for +21d</td>
+<td>Brier skill −1.1% walk-forward</td>
+<td>Base +21d up-rate 64.3%. Every fear/VIX band sits 59–71% — no band is a direction signal</td>
+</tr>
+<tr>
+<td>Magnitude: fear/VIX forecast move size</td>
+<td>Spearman +0.59</td>
+<td>VIX quintile → P(≥2% dip in 5d) rises <strong>9.7% → 19.1% → 25.2% → 34.7% → 51.2%</strong>; |fwd 5d move| 0.91% → 2.89%</td>
+</tr>
+<tr>
+<td>IBS &lt; 0.10 is a real next-day mean-reversion flag</td>
+<td>59.6% up next day vs 53.6% base</td>
+<td><strong>Confirmed:</strong> IBS&lt;0.10 → 59.6% up next day, +0.19% avg (vs +0.04% base); holds in both 1991–2010 (64.0% +21d) and 2011–2026 (71.5%) eras</td>
+</tr>
+<tr>
+<td>SPX below 200-day = risk, not a short signal</td>
+<td>"no bear condition survived both eras"</td>
+<td>Below-200d: P(2% dip in 5d) <strong>47.0%</strong> vs 22.2% above — a <em>risk</em> fact. Its +21d up-rate is still 59–66% — shorting it is betting against the base rate</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Therefore, in the Master the regime layer has exactly three jobs — all risk jobs:</strong>
+1. <strong>Gate:</strong> HIGH/STRESS (VIX ≥ 25 base, +1 level per downgrade: VIX&gt;VIX3M inversion, SPX&lt;200d, Baa-10Y +10bp/5d or +20bp/21d, major event &lt;24h) → no trade. ELEVATED → half size.
+2. <strong>Size the expected move:</strong> position width/strikes are sanity-checked against the 1σ expected move (VIX/√252). If the 1.2R target exceeds 1.0× the expected <em>daily</em> move, skip — the target is a fantasy that day.
+3. <strong>Context flag (IBS):</strong> prior-day IBS &lt; 0.10 adds +5 to the Quality Score of <em>long</em> candidates (validated effect, both eras); IBS &gt; 0.90 subtracts 5 from longs. It never creates a trade by itself and never flips a short into a long.</p>
+<p>It is <strong>forbidden</strong> from: changing direction, overriding a trap signal because of headlines/futures/sentiment (v4 operating rule 6), or turning the Bull/Bear base-rate number into a filter. "BULL 64/100" in the morning report means "the drift is the best-evidenced call," not "today is bullish" — the Master treats it that way.</p>
+<p>Outside support for the added pieces: the IBS mean-reversion effect on broad indices is documented across three decades of index data <a href="https://www.quantifiedstrategies.com/internal-bar-strength-ibs-indicator-strategy/">1</a>; the VIX/VIX3M inversion as a crisis/regime marker (rather than VIX level alone) is standard term-structure practice <a href="https://volatilitybox.com/research/vix-contango-backwardation/">2</a>; and plain ORB <em>breakout</em> (the killed P1B) has failed independent replication, while opening-range work that does survive emphasises <em>which</em> instrument/day you trade over the breakout itself <a href="https://paperswithbacktest.com/strategies/orb-trading-strategy">3</a> — exactly the Master's design (trap fade + day-selection by RVOL-normalcy).</p>
+<hr />
+<h2>4. The one genuinely new discovery: rank by RVOL-normalcy</h2>
+<p>Candidate ranking in original Apex was "entry minute, then module score (e.g. 10 − RVOL)". On the fresh sample, the single most powerful <em>selection</em> variable among surviving index candidates was:</p>
+<blockquote>
+<p><strong>Among the day's P1C/P2 index candidates, take the one whose RVOL is closest to 1.00</strong> (cumulative volume ≈ its prior-20-day norm at that time of day).</p>
+</blockquote>
+<p>Effect on the 57 one-per-day trades (Master exit, TP 1.2R):</p>
+<table>
+<thead>
+<tr>
+<th>Ranking rule (1 trade/day)</th>
+<th>Win</th>
+<th>Mean R</th>
+<th>PF</th>
+<th>Max DD</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Apex-style: module priority, then earliest</td>
+<td>54.4%</td>
+<td>+0.16</td>
+<td>1.25</td>
+<td>−11.8R</td>
+</tr>
+<tr>
+<td>Latest candidate</td>
+<td>56.1%</td>
+<td>+0.22</td>
+<td>1.36</td>
+<td>−12.7R</td>
+</tr>
+<tr>
+<td>Highest |z| (most stretched)</td>
+<td>56.1%</td>
+<td>+0.25</td>
+<td>1.42</td>
+<td>−6.2R</td>
+</tr>
+<tr>
+<td><strong>RVOL closest to 1.00 (Master)</strong></td>
+<td><strong>70.2%</strong></td>
+<td><strong>+0.31</strong></td>
+<td><strong>1.74</strong></td>
+<td><strong>−3.5R</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Mechanism (plausible, not proven): a trap poke on <em>climax</em> volume (RVOL ≫ 1) is more often genuine informed breakout flow — fading it is fighting real money. A trap poke on <em>normal</em> volume is more often a liquidity wick/stop-hunt that mean-reverts. This also explains the raw-module result that RVOL ≥ 1.25 buckets were the worst in the whole candidate pool (−0.29R). Traps need boredom, not excitement.</p>
+<p><strong>Statistical honesty:</strong> this ranking was selected from ~6 candidate rankings on the same 57-trade sample. It is positive in the train half (+0.39R, PF 2.10), the test half (+0.22R, PF 1.48), and all three date-thirds (+0.82 / +0.23 / +0.17R at the 1.8R profile) — the consistency across <em>non-overlapping</em> slices is the reason it is adopted — but it remains a discovered-in-sample effect and is the #1 thing the forward test (§9) must confirm. The t-test on the final series (t = 2.65 at 2.5R profile, p ≈ 0.01) does <strong>not</strong> correct for the selection of this rule, and I am not presenting it as if it does.</p>
+<hr />
+<h2>5. Master Quality Score (replaces the Apex confidence score)</h2>
+<p>Scores <strong>rank</strong> candidates within a day. They are not probabilities (the Apex score's pretence of actionability, at AUC 0.49, is dropped).</p>
+<pre><code>Start 50
++20 × (1 − min(|RVOL − 1.00|, 1))        # RVOL-normalcy — the backtested core (max +20 at RVOL=1.0)
++10   if module = P1C                     # primary module; P2 fallback gets +0
++10   if minute ≤ 120                     # morning traps resolved better; P2 window excepted
+ +5   if prior-day IBS &lt; 0.10 and long    # validated mean-reversion context (§3)
+ +5   if Fear Gauge 41–80 (NORMAL/ELEVATED fear band — traps need something to revert from)
+ −15  if RVOL &gt; 1.65                        # climax veto zone (candidate already vetoed at scan)
+ −10  if VIX 20–25 (ELEVATED base regime)   # tradeable, but penalised; ≥25 is a hard gate
+  0   for headlines, futures, sentiment, CNN F&amp;G, analyst opinion — always (v4 rule 6)
+Take the highest score. Require score ≥ 60 to trade at all; 60–74 = half size, ≥75 = full size.
+</code></pre>
+<p>In the backtest the score threshold corresponds to the RVOL filter: days where even the best candidate had RVOL &lt; 1.2 profiled at 61% win / PF 1.70 vs the unfiltered day pool. Treat the 60-point floor as the "no-trade is fine" line.</p>
+<hr />
+<h2>6. Daily workflow (what the bot/you actually do)</h2>
+<table>
+<thead>
+<tr>
+<th>Time ET</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>09:20</td>
+<td>Cloudflare scheduler starts the bot (unchanged Apex infra). Fetch prior closes.</td>
+</tr>
+<tr>
+<td>09:20–09:25</td>
+<td>Run <code>bbc_daily.py</code> (Regime PATH A; <code>--event-24h</code> if FOMC/CPI/NFP/election ≤24h). Publish the v4 morning report. Apply the GATE. If gated off or event day → post "NO TRADE TODAY — [reason]" and stand down (still run the EOD reconciliation for the paper ledger).</td>
+</tr>
+<tr>
+<td>09:30–09:45</td>
+<td>Build OR15, start VWAP/EMA/ATR/RVOL accumulators on SPY/QQQ/IWM (1-min bars live).</td>
+</tr>
+<tr>
+<td>09:45–14:00</td>
+<td>Scan for P1C (primary) / P2 (fallback, from 10:45). Apply vetoes. The moment ≥1 candidate survives, score, and <strong>wait for the best-scoring candidate to complete</strong> — one shot only. If a candidate is taken, all scanning stops.</td>
+</tr>
+<tr>
+<td>Entry +2 min max</td>
+<td>If the debit spread cannot be filled within 2 minutes at ≤ modelled mid + 1 tick, cancel — missed-entry alerts are logged, never chased (Apex sensitivity study).</td>
+</tr>
+<tr>
+<td>Exit</td>
+<td>Automated alerts at +1.2R (exit alert), close-based −1R (exit alert), 100-min time exit, 15:55 hard flat. No resting stop orders at the broker.</td>
+</tr>
+<tr>
+<td>16:25</td>
+<td>EOD job (unchanged Apex design): re-run on final bars, reconcile, append to <code>ledger/trades.csv</code>, log real bid/ask observed at entry/exit (closes the #1 gap named in the Apex recommendations), update the forward-test scoreboard (§9).</td>
+</tr>
+</tbody>
+</table>
+<p>Alert format adds three fields to the Apex ENTRY alert: <code>REGIME: NORMAL (VIX 17.8, no downgrades) · SIZE: FULL</code> / <code>SCORE: 78 (RVOL 1.04, P1C, IBS bonus)</code> / <code>PLAN: stop −1R close-based, target +1.2R, time 100m</code>. TP1/EXIT alerts unchanged.</p>
+<hr />
+<h2>7. Backtest — methodology</h2>
+<ul>
+<li><strong>Data:</strong> Yahoo Finance 5-minute bars, SPY/QQQ/IWM + 9 Apex single names, 2026-08-12 → 2026-11-04 (59 sessions), regular hours only. 5-minute (not Apex's 1-minute) is a Yahoo history constraint — module <em>logic</em> is ported faithfully, windows converted to elapsed minutes; this is disclosed as an adaptation, and the live spec remains 1-minute. Daily context (VIX prior close, SPX vs 50/200-day, IBS, RSI(2)) from daily bars; long regime replication on SPX/VIX daily 1991–2026 (CBOE/FRED-equivalent series via Yahoo <code>^GSPC</code>/<code>^VIX</code>).</li>
+<li><strong>Candidate generation:</strong> each Apex module at most once per ticker-day (Apex rule). 1,385 candidates with features at signal close (no look-ahead: entry is the <em>next</em> bar's open; RVOL uses prior-20-day same-slot cumulative volume only; daily context uses prior-day closes only).</li>
+<li><strong>Outcome model:</strong> underlying R-multiples. R = 0.9 × ATR14(5m) at signal; stop −1R on bar close (Apex convention); target/time per variant; <strong>0.15R per trade deducted</strong> as spread/slippage proxy. Winners/losers are thus comparable across modules/tickers without pretending Black-Scholes 0DTE quotes were observable — a limitation §8 states plainly.</li>
+<li><strong>Selection backtest:</strong> candidates → vetoes → 1 trade/day by ranking rule. Train = 2026-08-14 → 09-23, Test = 09-24 → 11-04 (split fixed before ranking rules were compared; ranking rules were compared on both halves and on date-thirds).</li>
+<li><strong>Regime replication:</strong> SPX daily 1991–2026, forward 1/5/21-day returns and 5-day forward drawdown by IBS, RSI(2), VIX band, 200-day position (<code>results/regime_long_daily.csv</code>).</li>
+<li>Code: <code>backtest/fetch_data.py</code>, <code>engine.py</code>, <code>explore.py</code>, <code>exit_opt.py</code>, <code>policy.py</code>, <code>policy2.py</code>, <code>robustness.py</code>, <code>final_checks.py</code>, <code>make_final.py</code>. All numbers in §8 are reproducible from <code>results/</code> CSVs.</li>
+</ul>
+<h2>8. Results</h2>
+<p><strong>Raw Apex modules first (the "do not skip this" table).</strong> At Apex's own exit ratios, every module lost on fresh data (mean R per candidate, n = 1,385): P1A −0.25R, P1B −0.18R, P1C −0.04R, P2 −0.14R, P3 −0.34R. No exit variant (targets 0.8R–2.5R, intrabar stops, hold-to-close) made the <em>unfiltered</em> pool positive. <strong>The edge, such as it is, lives entirely in selection — which is why the Master is a selection strategy built on Apex triggers, not a threshold re-tune.</strong></p>
+<p><strong>Master (P1C-primary index traps, RVOL-normalcy ranking, 1/day), by exit profile:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>n</th>
+<th>Win</th>
+<th>Mean R</th>
+<th>PF</th>
+<th>Sum R</th>
+<th>Max DD</th>
+<th>Train mean</th>
+<th>Test mean</th>
+<th>Max consec. losses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>TP 1.2R / 100 min (ADOPTED — reliability)</strong></td>
+<td>57</td>
+<td><strong>70.2%</strong></td>
+<td>+0.31</td>
+<td>1.74</td>
+<td>+17.4R</td>
+<td>−3.5R</td>
+<td>+0.39 (PF 2.10)</td>
+<td>+0.22 (PF 1.48)</td>
+<td>2</td>
+</tr>
+<tr>
+<td>TP 0.8R / 100 min (highest win, cost-fragile)</td>
+<td>57</td>
+<td>77.2%</td>
+<td>+0.16</td>
+<td>1.48</td>
+<td>+9.3R</td>
+<td>−3.9R</td>
+<td>+0.20</td>
+<td>+0.12</td>
+<td>2</td>
+</tr>
+<tr>
+<td>TP 2.5R / 100 min (runner — higher PF)</td>
+<td>57</td>
+<td>59.6%</td>
+<td>+0.60</td>
+<td>2.14</td>
+<td>+34.3R</td>
+<td>−6.2R</td>
+<td>+0.65 (PF 2.46)</td>
+<td>+0.56 (PF 1.91)</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Apex ladder, intrabar stop, TP 1.2R</td>
+<td>57</td>
+<td>61.4%</td>
+<td>+0.17</td>
+<td>1.41</td>
+<td>+9.9R</td>
+<td>−3.7R</td>
+<td>+0.12</td>
+<td>+0.23</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Sample equity curve: <code>results/equity_curve.png</code>. Trade log: <code>results/MASTER_trades_tp1.2.csv</code>.</p>
+<p><strong>Cost &amp; fragility stress (adopted TP 1.2R profile, extra cost charged per trade on top of the modelled 0.15R):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Extra cost</th>
+<th>Win</th>
+<th>Mean R</th>
+<th>PF</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>+0.00R (as modelled)</td>
+<td>70.2%</td>
+<td>+0.31</td>
+<td>1.74</td>
+<td>—</td>
+</tr>
+<tr>
+<td>+0.15R (≈2× modelled)</td>
+<td>70.2%</td>
+<td>+0.16</td>
+<td>1.34</td>
+<td>survives</td>
+</tr>
+<tr>
+<td>+0.30R (≈3× modelled)</td>
+<td>70.2%</td>
+<td>+0.01</td>
+<td>1.01</td>
+<td>breakeven — your broker/quote quality decides</td>
+</tr>
+<tr>
+<td>+0.50R</td>
+<td>68.4%</td>
+<td>−0.19</td>
+<td>0.65</td>
+<td>dead — do not trade at these costs</td>
+</tr>
+</tbody>
+</table>
+<p>(The 2.5R runner survives to +0.50R at PF 1.14 — if real fills are poor, the runner profile is the more cost-robust choice despite the lower win rate. This trade-off is stated, not hidden.)</p>
+<p><strong>What did <em>not</em> help</strong> (tested, rejected — do not re-add without new data): SPY-VWAP intraday alignment (aligned trades were <em>worse</em> for P1A/P1B/P1C), VIX &lt; 20 vs 20–25 split (no separation in this calm sample — the regime gate is retained on 36-year risk evidence, not on this sample's returns), gap-size filters, IBS as a hard intraday filter (kept as score context only), single-name inclusion, P1B breakout confirmation, P3 squeezes at any exit, intrabar stops (worse again — replicating Apex's own 10-21 finding).</p>
+<p><strong>Sample limitations (read before believing any number above):</strong>
+1. <strong>59 sessions, one volatility regime</strong> (VIX &lt; 25 throughout; SPX above its 200-day every day). The HIGH/STRESS gate has <em>zero</em> live observations in the intraday sample — it rests on the 1991–2026 daily replication, where it is a drawdown fact (47% vs 22% chance of a 2% 5-day dip below the 200-day), not a fitted return filter.
+2. <strong>5-minute adaptation</strong> of 1-minute modules; live 1-minute fills will differ, per Apex's own delay sensitivity (1-min ≈ −19% of edge).
+3. <strong>Underlying R, not options P&amp;L.</strong> Debit-spread payoff is convex and capped; mapping R to spread ROI requires live bid/ask logging (Apex recommendation #3, adopted in §6). Expect options ROI to compress both tails vs the R figures.
+4. The RVOL-normalcy ranking and the index-only universe were <strong>selected on this sample</strong>. Both halves and all thirds agree, but multiple-comparison inflation is real and uncorrected.
+5. Yahoo bars are unadjusted for the intraday files' corporate actions beyond the vendor feed; single-name results (killed modules) are therefore, if anything, <em>flattered</em>.</p>
+<h2>9. Pre-registered forward test (the actual deliverable gate)</h2>
+<p>The Master is <strong>not approved for live size</strong> on the evidence above. It is approved for a paper forward test, registered here in advance:</p>
+<ul>
+<li><strong>Freeze:</strong> this document, code at <code>backtest/</code>, Quality Score, gates, TP 1.2R profile. No parameter changes during the test. Any change restarts the count at zero (Apex 10-21/10-23 lesson).</li>
+<li><strong>Duration:</strong> first <strong>100 Master trades</strong> (≈ 100–120 sessions, since most days produce a candidate) or 6 months, whichever is later.</li>
+<li><strong>Pass bar (all required):</strong> win rate ≥ 60% · PF ≥ 1.30 after <em>real</em> logged spreads/fees · mean ≥ +0.10R with bootstrap 95% CI lower bound &gt; −0.05R · max drawdown ≥ −8R · no more than 6 consecutive losses.</li>
+<li><strong>Kill criteria (any one):</strong> PF &lt; 0.90 after 50 trades · mean &lt; −0.10R after 50 trades · real round-trip cost &gt; 0.45R equivalent on index debit spreads (the §8 breakeven) · regime gate would have blocked &gt; 40% of days (strategy is regime-dependent in a way the sample can't price).</li>
+<li><strong>Hypotheses logged for after the test (not during):</strong> H1 — QQQ/IWM-only beats SPY-included. H2 — runner (2.5R) beats reliability (1.2R) profile net of real costs. H3 — IBS &lt; 0.10 long bonus adds ≥ 0.05R/trade. Each gets its own fresh-sample verdict, exactly as the Apex verdict docs structured theirs.</li>
+<li><strong>Sizing during test:</strong> paper only. After a pass: 0.25% risk/trade for 50 live trades, then 0.50% — never the original 25%-per-slot Apex sizing.</li>
+</ul>
+<h2>10. Implementation notes for the Apex Chronos bot (samedame/Apex_Chronos)</h2>
+<p>Minimal-diff path from the existing bot: (1) add <code>bbc_daily.py</code> PATH A run at 09:20; gate state into the alert header; (2) disable P1A/P1B/P3 emitters (keep code, add <code>MASTER_DISABLED</code> flag); (3) restrict universe env to <code>SPY,QQQ,IWM</code>; (4) replace candidate ranking (entry-minute → Quality Score §5) and the 3-slot portfolio allocator with a single daily slot that locks on first fill; (5) replace module TP ratios with the R-based exit (R = 0.9·ATR14 computed on 1-min bars live: ATR over 70 1-min bars ≈ one 5-min day-fraction — calibrate once against the 5-min value at 09:45 and log both); (6) add real bid/ask capture at signal/fill/exit to <code>ledger/trades.csv</code>; (7) keep the 16:25 reconciliation job and the perturbed-market test harness — they already proved they catch broken bots, which matters more now that ranking logic changed.</p>
+<hr />
+<h3>Sources</h3>
+<ul>
+<li>User-supplied: <em>Apex Chronos Strategy Summary</em> (2026-11-04) and <em>MASTER_PROMPT_REGIME v4 / Daily Regime Prompt</em> (2026-11-03), including <code>bbc_daily.py</code> and its frozen 1996–2026 lookup tables.</li>
+<li>Quantified Strategies — IBS indicator strategies &amp; backtests (index mean-reversion, 30-yr evidence): https://www.quantifiedstrategies.com/internal-bar-strength-ibs-indicator-strategy/</li>
+<li>Volatility Box — VIX futures term structure, VIX vs VIX3M inversion: https://volatilitybox.com/research/vix-contango-backwardation/</li>
+<li>Papers With Backtest — ORB replication review (Zarattini &amp; Aziz): https://paperswithbacktest.com/strategies/orb-trading-strategy ; DanFin — ORB research comparison: https://danfin.net/opening-range-breakout-research</li>
+<li>Data: Yahoo Finance (5-min/daily bars), CBOE &amp; FRED via the supplied regime calculator design.</li>
+</ul>
+<p><em>Analytical output, not personalized financial advice. Past (and simulated) performance does not guarantee future results. The Master is a research strategy with a pre-registered paper-trading gate — treat it that way.</em></p>
+<h2>Charts</h2><img src="results/equity_curve.png"><img src="results/raw_modules.png">
+</body></html>

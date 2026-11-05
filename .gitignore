@@ -1,0 +1,10 @@
+# runtime output of the live bot
+apex_master_bot/state/
+apex_master_bot/ledger/
+apex_master_bot/logs/
+# python / OS clutter
+__pycache__/
+*.pyc
+.DS_Store
+# secrets
+.env

@@ -1,0 +1,15 @@
+{
+  "name": "Apex Chronos MASTER v1.0",
+  "max_trades_per_day": 1,
+  "universe": ["SPY","QQQ","IWM"],
+  "primary_module": "P1C",
+  "fallback_module": "P2",
+  "disabled_modules": ["P1A","P1B","P3"],
+  "regime_gate": {"no_trade_if_final_regime_in": ["HIGH","STRESS"], "half_size_if": "ELEVATED", "event_day_no_trade": true, "vix_hard_cap_prior_close": 25},
+  "vetoes": ["rvol>1.65","confirmed_ORB_breakout_against_fade","single_name","spy_slope_against_trade"],
+  "ranking": "quality_score_desc; core = RVOL closest to 1.00",
+  "quality_score_min": 60,
+  "exit": {"R_definition": "0.9*ATR14_5m_at_signal", "stop": "-1.0R on bar close, no resting broker stop", "target_R": 1.2, "runner_target_R": 2.5, "max_hold_minutes": 100, "hard_flat": "15:55 ET"},
+  "risk": {"risk_per_trade_pct_account": 0.5, "elevated_regime_pct": 0.25, "weekly_stop_R": -3},
+  "forward_test": {"trades_required": 100, "pass": "win>=60%, PF>=1.30 after real costs, mean>=+0.10R, maxDD>=-8R"}
+}
