@@ -1,0 +1,78 @@
+{
+ "cohort_cfg": "4431b82879",
+ "ignored_trades": 0,
+ "metrics": {
+  "n": 1,
+  "win": 0.0,
+  "mean": -1.8657,
+  "sum": -1.8657,
+  "pf": 0.0,
+  "max_dd": -1.8657,
+  "max_losses": 1,
+  "ci_low": -1.8657,
+  "ci_high": -1.8657
+ },
+ "progress": {
+  "trades": 1,
+  "trades_target": 100,
+  "days": 0,
+  "days_target": 182,
+  "decision_ready": false
+ },
+ "verdict": "IN PROGRESS",
+ "pass_checks": [
+  {
+   "name": "win rate >= 60%",
+   "value": 0.0,
+   "ok": false,
+   "shown": "0.0%"
+  },
+  {
+   "name": "profit factor >= 1.30",
+   "value": 0.0,
+   "ok": false,
+   "shown": "0.00"
+  },
+  {
+   "name": "mean >= +0.10R",
+   "value": -1.8657,
+   "ok": false,
+   "shown": "-1.866R"
+  },
+  {
+   "name": "bootstrap 95% CI lower bound > -0.05R",
+   "value": -1.8657,
+   "ok": false,
+   "shown": "-1.866R"
+  },
+  {
+   "name": "max drawdown >= -8R",
+   "value": -1.8657,
+   "ok": true,
+   "shown": "-1.9R"
+  },
+  {
+   "name": "losing streak <= 6",
+   "value": 1,
+   "ok": true,
+   "shown": "1"
+  }
+ ],
+ "kill_checks": [
+  {
+   "name": "PF / mean kill tests (start at 50 trades)",
+   "hit": null,
+   "shown": "1/50 trades"
+  },
+  {
+   "name": "real round-trip cost > 0.45R",
+   "hit": null,
+   "shown": "not measured yet (needs quote logging)"
+  },
+  {
+   "name": "VIX gate blocked > 40% of days",
+   "hit": null,
+   "shown": "0/1 days observed (needs 20)"
+  }
+ ]
+}

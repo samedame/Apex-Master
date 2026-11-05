@@ -1,0 +1,33 @@
+{
+ "scanned": {
+  "SPY": 20,
+  "QQQ": 20,
+  "IWM": 20
+ },
+ "fired": {
+  "SPY": [
+   "P2"
+  ],
+  "QQQ": [
+   "P2"
+  ],
+  "IWM": []
+ },
+ "trade": {
+  "ticker": "SPY",
+  "date": "2026-11-05",
+  "ts": "2026-11-05 11:10:00-05:00",
+  "bar": 20,
+  "minute": 100,
+  "module": "P2",
+  "direction": 1,
+  "rvol": 7.776195317596754,
+  "stop_dist": 2.5412240164620536,
+  "signal_close": 744.3900146484375,
+  "entry": 744.3699951171875,
+  "band": "NORMAL",
+  "risk_pct": 0.5
+ },
+ "done": true,
+ "outcome": "traded"
+}

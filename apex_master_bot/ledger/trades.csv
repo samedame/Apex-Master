@@ -1,0 +1,2 @@
+date,ticker,module,direction,signal_ts,minute,rvol,entry,stop_dist,R,reason,bars,band,risk_pct,cfg,real_cost_R
+2026-11-05,SPY,P2,1,2026-11-05 11:10:00-05:00,100,7.7762,744.37,2.5412,-1.8657,stop,10,NORMAL,0.5,4431b82879,
