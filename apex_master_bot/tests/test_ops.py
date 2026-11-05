@@ -224,5 +224,84 @@ class LiveLoopOps(Tmp):
         self.assertEqual(st["outcome"], "stood_down"); self.assertTrue(st["stand_down"].startswith("VIX"))
 
 
+class ActionsPieces(Tmp):
+    def test_no_candidate_day_ends_early_at_the_scan_cutoff(self):
+        from apex_master_bot import live
+        import io, contextlib
+        a = types.SimpleNamespace(simulate_date="2026-09-21", data=DATA, state_dir=self.state, ledger_dir=self.ledger, poll=60)
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            live.run_live(Config(), a)
+        st = json.load(open(os.path.join(self.state, "sim", "2026-09-21.json")))
+        hb = json.load(open(os.path.join(self.state, "sim", "heartbeat.json")))
+        self.assertEqual(st["outcome"], "no_candidate")
+        self.assertLess(dt.datetime.fromisoformat(hb["ts"]).time(), dt.time(13, 40))     # stopped at ~13:35, not 16:00
+
+    def test_force_eod_summarises_right_after_the_session(self):
+        self.wj("2026-11-04.json", dict(done=True, outcome="no_candidate"))
+        f = watchdog.check(at(13, 40), self.state, self.ledger, force_eod=True)
+        self.assertEqual((f[0][0], f[0][1]), ("eod-summary", "info")); self.assertIn("no setup fired", f[0][2])
+        self.assertEqual(watchdog.check(at(13, 40), self.state, self.ledger), [])          # without the flag it is still mid-session: quiet
+
+    def test_ensure_cli_reports_result_for_the_workflow(self):
+        out = os.path.join(self.d, "gh_out")
+        from apex_master_bot.__main__ import main
+        os.environ["GITHUB_OUTPUT"] = out
+        try:
+            import io, contextlib
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(["ensure", "--state-dir", self.state, "--ledger-dir", self.ledger])     # real clock: not a session window in CI, or already done
+        finally:
+            del os.environ["GITHUB_OUTPUT"]
+        self.assertIn(open(out).read().strip(), ("result=skip", "result=ran"))
+
+    def test_webhook_post_success_and_failure(self):
+        import http.server, threading
+        from apex_master_bot.live import Notifier
+        got = []
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                got.append((self.headers.get("User-Agent"), json.loads(body)))
+                self.send_response(500 if "fail" in self.path else 204); self.end_headers()
+            def log_message(self, *a): pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            n = Notifier(os.path.join(self.d, "logs"))
+            n.hook = f"http://127.0.0.1:{srv.server_port}/ok"
+            self.assertTrue(n.post("hello"))
+            self.assertEqual(got[0][0], "apex-master-bot"); self.assertEqual(got[0][1], {"content": "hello"})   # Discord rejects the default urllib agent
+            n.hook = f"http://127.0.0.1:{srv.server_port}/fail"
+            self.assertFalse(n.post("hello"))
+            n.hook = "http://127.0.0.1:1/unreachable"
+            self.assertFalse(n.post("hello"))
+        finally:
+            srv.shutdown()
+
+    def test_discord_test_rejects_missing_or_malformed_url(self):
+        from apex_master_bot.live import discord_test
+        import io, contextlib
+        old = os.environ.pop("DISCORD_WEBHOOK_URL", None)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as b:
+                self.assertFalse(discord_test())
+            self.assertIn("not set", b.getvalue())
+            os.environ["DISCORD_WEBHOOK_URL"] = "discord.com/api/webhooks/123abc"          # pasted without https:// or token
+            with contextlib.redirect_stdout(io.StringIO()) as b:
+                self.assertFalse(discord_test())
+            self.assertIn("does not look like", b.getvalue())
+        finally:
+            os.environ.pop("DISCORD_WEBHOOK_URL", None)
+            if old: os.environ["DISCORD_WEBHOOK_URL"] = old
+
+    def test_workflows_are_dispatchable_with_the_scheduler_inputs(self):
+        import yaml
+        wf = os.path.join(ROOT, "..", ".github", "workflows", "master-session.yml")
+        y = yaml.safe_load(open(wf))
+        on = y.get(True) or y.get("on")
+        self.assertIn("scheduled_for_et", on["workflow_dispatch"]["inputs"]); self.assertIn("trigger", on["workflow_dispatch"]["inputs"])
+        self.assertLessEqual(y["jobs"]["session"]["timeout-minutes"], 360)
+        self.assertEqual(y["permissions"]["contents"], "write")
+
+
 if __name__ == "__main__":
     unittest.main()

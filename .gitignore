@@ -1,6 +1,10 @@
-# runtime output of the live bot
-apex_master_bot/state/
-apex_master_bot/ledger/
+# live-bot runtime files that must NOT be committed (the daily state/<date>.json and ledger/*.csv ARE committed:
+# the GitHub Actions session saves them back so the scoreboard and restarts can see them)
+apex_master_bot/state/heartbeat.json
+apex_master_bot/state/live.pid
+apex_master_bot/state/watchdog.json
+apex_master_bot/state/sim/
+apex_master_bot/ledger/sim/
 apex_master_bot/logs/
 # python / OS clutter
 __pycache__/

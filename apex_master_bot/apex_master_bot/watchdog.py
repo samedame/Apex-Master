@@ -23,13 +23,13 @@ def _read(path):
         return None
 
 
-def check(now, state_dir, ledger_dir):
+def check(now, state_dir, ledger_dir, force_eod=False):
     """Pure function: returns a list of (key, severity, message). severity is 'alert' or 'info'."""
     day = now.date()
     if not is_trading_day(day):
         return []
     t = now.time()
-    if t < GRACE_START:
+    if t < GRACE_START and not force_eod:
         return []
     ds = day.isoformat()
     hb = _read(os.path.join(state_dir, "heartbeat.json"))
@@ -37,7 +37,7 @@ def check(now, state_dir, ledger_dir):
     hb_today = hb if hb and hb.get("day") == ds else None
     out = []
 
-    if t < SESSION_END:
+    if t < SESSION_END and not force_eod:
         if st and st.get("done"):
             return []
         if hb_today is None:
@@ -59,7 +59,7 @@ def check(now, state_dir, ledger_dir):
         return out
 
     # end of day
-    if t > EOD_LAST:
+    if t > EOD_LAST and not force_eod:
         return []
     if st is None or not st.get("done"):
         why = "never ran today" if hb_today is None else "did not finish the session cleanly"
@@ -88,11 +88,11 @@ def check(now, state_dir, ledger_dir):
     return [("eod-summary", "info", msg)]
 
 
-def run(state_dir=None, ledger_dir=None, now=None, notifier=None):
+def run(state_dir=None, ledger_dir=None, now=None, notifier=None, force_eod=False):
     state_dir = state_dir or os.path.join(BASE, "state")
     ledger_dir = ledger_dir or os.path.join(BASE, "ledger")
     now = now or now_et()
-    findings = check(now, state_dir, ledger_dir)
+    findings = check(now, state_dir, ledger_dir, force_eod)
     if findings and notifier is None:
         from .live import Notifier
         notifier = Notifier()

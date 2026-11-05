@@ -1,0 +1,20 @@
+name: discord-test
+# Run this once after adding the DISCORD_WEBHOOK_URL repository secret. Green = Discord accepted the message.
+on:
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    defaults:
+      run:
+        working-directory: apex_master_bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pandas==2.3.3" "numpy==2.2.6"
+      - run: python3 -m apex_master_bot discord-test

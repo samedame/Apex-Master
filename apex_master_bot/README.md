@@ -67,6 +67,25 @@ The Mac has to be awake during market hours (09:30-16:00 ET = 07:30-14:00 Mounta
 - Logs: `ledger/candidates.csv` (every signal), `ledger/trades.csv` (closed trades), `state/<date>.json`, `logs/alerts.log`.
 - Dry run on any saved day: `python3 -m apex_master_bot live --simulate-date 2026-10-29 --data ../data --state-dir /tmp/x --ledger-dir /tmp/x --poll 60`.
 
+## Run it in the cloud (GitHub Actions + Discord + Cloudflare scheduler)
+
+One workflow, `.github/workflows/master-session.yml`, runs the whole day: it starts the live loop, then writes the end-of-day summary,
+updates the scoreboard, commits `state/` and `ledger/` back to the repo, and posts to Discord. A day with no candidate by ~13:35 ET ends early.
+
+1. **Discord webhook**: Server Settings -> Integrations -> Webhooks -> New Webhook -> Copy URL.
+2. **Repo secret**: GitHub repo -> Settings -> Secrets and variables -> Actions -> New repository secret.
+   Name = `DISCORD_WEBHOOK_URL`, Secret box = the URL. (Do not paste the URL into the Name box.)
+3. Run the **discord-test** workflow (Actions tab -> discord-test -> Run workflow). A test message must appear in Discord.
+4. Optional repo variables: `ACCOUNT_SIZE` (number), `APEX_PROFILE` (`reliability` or `runner`).
+5. **Cloudflare**: add a job to the `open-scheduler` Worker that dispatches `master-session.yml` on `main` of `samedame/Apex-Master`
+   at 09:20 ET, weekdays (Cron Triggers must use `MON-FRI` and cover UTC hours 13 and 14). The workflow takes the usual inputs
+   `scheduled_for_et` and `trigger`. The Worker's `GH_PAT` must be allowed to dispatch workflows on this repo.
+   A backup native cron (`25 13,14 * * 1-5`) is in the workflow and does nothing if the day is already done.
+6. Run only ONE runner (Actions or the Mac launchd jobs), otherwise both write the same ledger.
+
+Limits: state is committed at the end of the job, so a crash mid-day loses that day's state (the restart rescans and logs late signals as MISSED, it does not chase them).
+The repo is public, so `state/` and `ledger/` are world-readable.
+
 ## Forward-test scoreboard
 ```
 python3 -m apex_master_bot scoreboard            # prints the report and writes ledger/scoreboard.json

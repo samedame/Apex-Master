@@ -31,7 +31,9 @@ def main(argv=None):
     e.add_argument("--poll", type=int, default=30)
     dirs(e)
     w = sub.add_parser("watchdog", help="alert if the bot is down, stalled, has a dead feed, or left a trade open")
+    w.add_argument("--eod", action="store_true", help="evaluate the end-of-day state now (used right after a session)")
     dirs(w)
+    sub.add_parser("discord-test", help="send a test message to DISCORD_WEBHOOK_URL and report whether Discord accepted it")
     sc = sub.add_parser("scoreboard", help="score the forward test against the strategy document's pass and kill bars")
     sc.add_argument("--notify", action="store_true", help="also post a one-line summary to Discord")
     dirs(sc)
@@ -51,10 +53,16 @@ def main(argv=None):
         run_live(PROFILES[a.profile], a)
     elif a.cmd == "ensure":
         from . import ensure
-        ensure.run(PROFILES[a.profile], poll=a.poll, state_dir=a.state_dir, ledger_dir=a.ledger_dir)
+        res = ensure.run(PROFILES[a.profile], poll=a.poll, state_dir=a.state_dir, ledger_dir=a.ledger_dir)
+        if os.environ.get("GITHUB_OUTPUT"):                      # lets the workflow skip its wrap-up when nothing ran
+            with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                f.write(f"result={'ran' if res == 'ran' else 'skip'}\n")
     elif a.cmd == "watchdog":
         from . import watchdog
-        sys.exit(1 if any(f[1] == "alert" for f in watchdog.run(a.state_dir, a.ledger_dir)) else 0)
+        sys.exit(1 if any(f[1] == "alert" for f in watchdog.run(a.state_dir, a.ledger_dir, force_eod=a.eod)) else 0)
+    elif a.cmd == "discord-test":
+        from .live import discord_test
+        sys.exit(0 if discord_test() else 1)
     elif a.cmd == "scoreboard":
         from . import scoreboard
         scoreboard.run(a.ledger_dir, a.state_dir, a.notify)

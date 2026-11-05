@@ -51,13 +51,18 @@ class Notifier:
         stamp = (ts or dt.datetime.now(NY)).strftime("%Y-%m-%d %H:%M:%S ET")
         print(f"[{stamp}]\n{msg}\n", flush=True)
         with open(self.path, "a") as f: f.write(f"[{stamp}] {msg}\n")
-        if self.hook:
-            try:
-                req = urllib.request.Request(self.hook, data=json.dumps({"content": msg[:1900]}).encode(),
-                                             headers={"Content-Type": "application/json", "User-Agent": "apex-master-bot"})
-                urllib.request.urlopen(req, timeout=10).read()
-            except Exception as e:
-                print("webhook failed:", e, file=sys.stderr)
+        return self.post(msg) if self.hook else False
+
+    def post(self, msg):
+        """POST to the Discord webhook. Returns True only when Discord accepted it (HTTP 2xx)."""
+        try:
+            req = urllib.request.Request(self.hook, data=json.dumps({"content": msg[:1900]}).encode(),
+                                         headers={"Content-Type": "application/json", "User-Agent": "apex-master-bot"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return 200 <= r.status < 300
+        except Exception as e:
+            print("webhook failed:", type(e).__name__, str(e)[:120], file=sys.stderr)
+            return False
 
 
 def _state_path(d, day): os.makedirs(d, exist_ok=True); return os.path.join(d, f"{day}.json")
@@ -148,6 +153,8 @@ def run_live(cfg: Config, args):
     risk_pct = cfg.risk_pct_elevated if band == "ELEVATED" else cfg.risk_pct
     open_t = clock.now().replace(hour=9, minute=35, second=0, microsecond=0)
     end_t = clock.now().replace(hour=16, minute=0, second=0, microsecond=0)
+    # the last signal bar (P2: minute 239 from the open) completes at 13:34 ET; after that nothing can fire
+    scan_cut = clock.now().replace(hour=9, minute=30, second=0, microsecond=0) + dt.timedelta(minutes=cfg.p2_max_minute + cfg.bar_minutes + 1)
     notifier.send(f"APEX MASTER armed {day} | VIX prior close {_fmt(vix_prev)} ({band}) | risk {risk_pct:g}% | "
                   f"profile target {cfg.target_R:g}R | PAPER ALERTS ONLY", clock.now())
     while clock.now() < open_t: clock.sleep(15)
@@ -225,6 +232,8 @@ def run_live(cfg: Config, args):
                 st["done"], st["outcome"] = True, "traded"
 
     while clock.now() < end_t and not st["done"]:
+        if st["trade"] is None and clock.now() >= scan_cut:
+            break
         try:
             tick()
         except Exception as e:                      # never die silently mid-session: record it, tell the user, keep going
@@ -242,3 +251,18 @@ def run_live(cfg: Config, args):
         notifier.send("APEX MASTER WARNING - session ended with the trade still open. Check your position manually.", clock.now())
         st["outcome"] = "open_at_close"
     st["done"] = True; save(); beat("done")
+
+
+def discord_test():
+    """Used by the discord-test workflow and `python3 -m apex_master_bot discord-test`."""
+    hook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    if not hook:
+        print("DISCORD_WEBHOOK_URL is not set (GitHub: Settings > Secrets and variables > Actions > New repository secret; the NAME is DISCORD_WEBHOOK_URL, the URL goes in the value box).")
+        return False
+    if not hook.startswith("https://discord.com/api/webhooks/") and not hook.startswith("https://discordapp.com/api/webhooks/"):
+        print("DISCORD_WEBHOOK_URL is set but does not look like a Discord webhook URL (expected https://discord.com/api/webhooks/<id>/<token>).")
+        return False
+    n = Notifier()
+    ok = n.post("APEX MASTER: webhook test OK. If you can read this, session alerts, failure alerts and end-of-day summaries will reach this channel.")
+    print("Discord accepted the test message." if ok else "Discord REJECTED the message or could not be reached (see error above). Check the URL was not truncated and the webhook still exists.")
+    return ok
