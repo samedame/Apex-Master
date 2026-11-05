@@ -1,0 +1,2 @@
+# One date per line (YYYY-MM-DD): FOMC decision, CPI, NFP, election-result days. The bot stands down on these dates.
+# The strategy doc says no trade on event days; the backtest did NOT model this, so the list starts empty. Fill it in yourself.
