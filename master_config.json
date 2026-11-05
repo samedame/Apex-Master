@@ -30,6 +30,15 @@
     "backtest_1993_2026": {"n": 734, "per_year": 24.2, "net_bp_per_trade": 18.19, "ci95_bp": [5.4, 31.3], "hit": 0.569, "pf": 1.33, "max_dd_bp": -4506},
     "planning_haircut": "about 50% of in-sample edge (about +9 bp/trade)",
     "forward_test": {"pause_if_cum_net_bp_below": -1600, "retire_at_trades": 40, "retire_if_mean_net_bp_at_or_below": 0, "test_iwm_exclusion_once_at_trades": 40},
+    "out_of_sample_addendum3": {
+      "date": "2026-11-04",
+      "other_assets_20_etfs_1995_2026": {"n": 9057, "net_bp": 14.05, "ci95_bp": [5.7, 22.6], "holm_p": 0.0012, "result": "supports: same signal works on other ETFs, same period, so not independent in time"},
+      "pre_1993_sp500_index_1982_1992": {"n": 125, "net_bp": -40.3, "ci95_bp": [-86.4, -5.1], "result": "contradicts: signal absent in 1982-92 (also -14.7 bp for IBS<0.10 at any vol, n=379); 1970s index high/low give no usable signals; RV21 proxy agrees with VIX>=20 on only 85% of days"},
+      "label": "MIXED",
+      "tier2_ibs_0.10_0.20": {"n": 364, "net_bp": 5.19, "holm_p": 0.606, "admitted": false},
+      "vol_scaled_sizing": {"admitted": false},
+      "intraday_timing": "not testable with free data"
+    },
     "details": "research/master_v2/README.md"
   }
 }

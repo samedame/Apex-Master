@@ -8,7 +8,8 @@ Independent audit of Apex Chronos MASTER v1 and a search for a better "one trade
 2. Master v1's published +0.306R / PF 1.74 (57 trades) rests on a **hindsight pick** (whole-day ranking). The rule the bot can run live (first signal to fire) returns **-0.020R, PF 0.97, max DD -12.8R** on the reliability profile and +0.165R on the runner profile.
 3. The one idea that survived pre-registered testing is **Master v2**: previous VIX close >= 20 AND previous-day IBS < 0.10, take the first of SPY, QQQ, IWM, long at the open, exit at the close, at most one trade per day.
 4. v2 on 30 years of daily bars (net of 2 bp round trip): n=734 (24.2/yr), **+18.19 bp/trade**, 95% CI [+5.4, +31.3], hit 56.9%, PF 1.33, max DD -4,506 bp. The same signal with VIX < 20 loses 6.3 bp/trade, so the VIX gate is the whole edge.
-5. Treat it as a forward-test candidate, not a proven system. Plan on about half the in-sample edge (about +9 bp). Option P&L is unverified (no historical quotes).
+5. Follow-up tests (Addendum 3): the signal also works on 20 other ETFs (+14.1 bp, 1995-2026) but fails on the S&P 500 index in 1982-1992 (-40 bp, n=125), so the evidence label is MIXED. A second tier (IBS 0.10-0.20) and VIX-based sizing did not pass their pre-set tests.
+6. Treat it as a forward-test candidate, not a proven system. Plan on about half the in-sample edge (about +9 bp). Option P&L is unverified (no historical quotes).
 
 Next-session state at the 2026-11-04 close: VIX 16.61, IBS SPY 0.315 / QQQ 0.289 / IWM 0.550, so v2 says **no trade**.
 
@@ -58,6 +59,18 @@ Robustness (post hoc, labelled): placebo beats 99.98% of random same-size SPY VI
 
 v1's VIX >= 25 gate would block 69.5% of v2's profit. v1's IBS bonus is wrong-signed in calm markets (-6.3 bp when VIX < 20), and its RVOL ranking and confidence score (AUC 0.49) have no support.
 
+## Addendum 3: remaining add-on ideas (pre-registered 2026-11-04, `prereg/PREREG_ADDENDUM3.md`)
+
+| Idea | Test | Result (net of 2 bp) | Decision |
+| --- | --- | --- | --- |
+| Other assets | 20 other ETFs, VIX >= 20 and IBS < 0.10, 9,057 ticker-days, 1995-2026 | +14.05 bp, CI [+5.7, +22.6], Holm p=0.0012; same IBS<0.10 rule at VIX < 20 gives -2.9 bp; all VIX >= 20 ticker-days average +0.03 bp; US +15.4, international +12.5; both halves about +14 | Supports the signal across instruments. Not independent in time, so it does not settle the calendar-time question. No change to the bot. |
+| Earlier history | S&P 500 index 1970-1992, close-to-close, VIX replaced by an RV21 proxy (85% agreement with VIX >= 20) | n=125, **-40.3 bp**, CI [-86.4, -5.1]. Index 1970s high/low give almost no signals, so the real window is 1982-1992. Post hoc: IBS < 0.10 at any volatility is -14.7 bp there (n=379); excluding Oct-Nov 1987 still -18.0 bp | **Contradicts** the signal in 1982-1992. Caveats: index not ETF, volatility proxy, small sample. |
+| Tier 2 (IBS 0.10-0.20, VIX >= 20) | n=364, 10.8/yr | +5.19 bp, CI [-14.6, +25.9], Holm p=0.61; adding it at half weight leaves IR at 0.48 | Not admitted |
+| Volatility-scaled sizing | weight proportional to VIX, or to 1/VIX | IR change +0.008 (CI [-0.019, +0.026]) and -0.012 (CI [-0.025, +0.004]) | Not admitted |
+| Intraday entry/exit timing | needs years of 5-minute bars | Free sources give 60 days | Not testable |
+
+Net effect on confidence: the pre-registered label rule ("supported if either out-of-sample test passes") returns SUPPORTED, but that rule was loose. With one test passing and one clearly failing, the honest label is **MIXED**: the effect holds across assets in 1995-2026 and is not shown to hold before 1993. Keep the plan of paper trading at about half the in-sample edge. Reproduce: `python3 -I src/s08_addendum3.py data data_addendum3 /tmp/out`.
+
 ## Limits and risks
 
 - The VIX >= 20 split was found after seeing first-round data (D2), then pre-registered as Addendum 2 and tested on the same history. Not out-of-sample. About 130 tests were run in total.
@@ -78,6 +91,8 @@ Paper-trade every signal day with the ETF as the record; log the live option cre
 
 ## Reproduce
 
+`data_addendum3/` holds Open/High/Low/Close for the 20 extra ETFs (only for s08).
+
 ```
 pip install pandas numpy yfinance requests matplotlib
 cd research/master_v2
@@ -92,8 +107,8 @@ cmp /tmp/out/master_v2_trades.csv results/master_v2_trades.csv   # identical
 
 | Path | Contents |
 | --- | --- |
-| `prereg/` | Locked specs: PREREG.md and two addenda (hashes recorded in each) |
-| `src/` | common.py (loaders, bootstrap, Holm), s01 baseline, s02 H1-H5, s03 A5-A8 and D1-D9, s04 B1-B9, s05 controls, s06 final, s07 charts, fetch.py |
+| `prereg/` | Locked specs: PREREG.md and three addenda (hashes recorded in each) |
+| `src/` | common.py (loaders, bootstrap, Holm), s01 baseline, s02 H1-H5, s03 A5-A8 and D1-D9, s04 B1-B9, s05 controls, s06 final, s07 charts, s08 addendum 3, fetch.py |
 | `results/` | Result JSONs, event files, a7_scan.csv, `master_v2_trades.csv` (734 trades), two charts |
 
 *Research output, not personalized financial advice. Past and simulated performance does not guarantee future results.*
