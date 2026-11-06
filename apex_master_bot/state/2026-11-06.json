@@ -1,0 +1,8 @@
+{
+ "scanned": {},
+ "fired": {},
+ "trade": null,
+ "done": true,
+ "stand_down": "VIX prior close 28.18 >= 25 (HIGH)",
+ "outcome": "stood_down"
+}
