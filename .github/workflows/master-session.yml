@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 355
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      ACCOUNT_SIZE: ${{ vars.ACCOUNT_SIZE }}
+      ACCOUNT_SIZE: ${{ vars.ACCOUNT_SIZE || '1500' }}   # default 1500; a repo variable overrides it
       APEX_PROFILE: ${{ vars.APEX_PROFILE || 'reliability' }}
       PYTHONUNBUFFERED: "1"
     defaults:
