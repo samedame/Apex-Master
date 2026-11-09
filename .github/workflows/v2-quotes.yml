@@ -46,6 +46,12 @@ jobs:
           python3 -m apex_master_bot v2-quotes --state-dir state --ledger-dir ledger --date "${SESSION_DATE:-$(TZ=America/New_York date +%F)}"
 
 
+      - name: Capture the shadow entry observation
+        if: always()
+        env:
+          SESSION_DATE: ${{ inputs.session_date }}
+        run: python3 -m apex_master_bot v2-shadow entry --state-dir state --ledger-dir ledger --session "${SESSION_DATE:-$(TZ=America/New_York date +%F)}"
+
       - name: Save quotes back to the repo
         if: always()
         working-directory: .

@@ -55,6 +55,10 @@ jobs:
           python3 -m apex_master_bot v2-check --state-dir state --ledger-dir ledger
           if [ "$(TZ=America/New_York date +%u)" = "5" ]; then python3 -m apex_master_bot v2-status --ledger-dir ledger --notify; fi
 
+      - name: Record the prospective QQQ-first shadow selection
+        if: always()
+        run: python3 -m apex_master_bot v2-shadow select --state-dir state --ledger-dir ledger
+
       # Push the v2 decision right away so the independent v2-watchdog workflow can see that today's check ran.
       - name: Save v2 check state now
         if: always()
@@ -148,7 +152,7 @@ jobs:
         run: |
           git config user.name "apex-master-bot"
           git config user.email "apex-master-bot@users.noreply.github.com"
-          git add -A apex_master_bot/state apex_master_bot/ledger ":!apex_master_bot/state/v2" ":!apex_master_bot/ledger/v2_*.csv"
+          git add -A apex_master_bot/state apex_master_bot/ledger ":!apex_master_bot/state/v2" ":!apex_master_bot/ledger/v2_*.csv" ":!apex_master_bot/ledger/shadow"
           if git diff --cached --quiet; then echo "nothing to save"; exit 0; fi
           git commit -q -m "apex-master $(TZ=America/New_York date +%F) v1 session [skip ci]"
           for i in 1 2 3 4 5; do

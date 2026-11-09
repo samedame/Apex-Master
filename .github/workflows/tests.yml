@@ -23,7 +23,7 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Lint and compile paper research modules
         run: |
-          ruff check --select E9,F63,F7,F82,F401 apex_master_bot/{market_regime,option_replay,options_execution,risk,state_io,v2,v2_quotes}.py ../research/master_v3/validate.py
+          ruff check --select E9,F63,F7,F82,F401 apex_master_bot/{market_regime,option_replay,options_execution,risk,shadow,state_io,v2,v2_quotes}.py ../research/master_v3/validate.py
           python -m compileall -q apex_master_bot ../research/master_v3
       - name: Reproduce historical comparison
         run: PYTHONPATH=. python ../research/master_v3/validate.py > "$RUNNER_TEMP/apex-v3-validation.json"

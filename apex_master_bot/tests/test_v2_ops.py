@@ -212,7 +212,7 @@ class Wiring(unittest.TestCase):
         steps = wd["jobs"]["watchdog"]["steps"]
         self.assertTrue(any("v2-watchdog" in s.get("run", "") for s in steps))
         crons = [c["cron"] for c in wd[True]["schedule"]] if True in wd else [c["cron"] for c in wd["on"]["schedule"]]
-        self.assertEqual(crons, ["40 13,14 * * 1-5", "25 20,21 * * 1-5"])
+        self.assertEqual(crons, ["40 13,14 * * 1-5", "25 20,21 * * 1-5", "48 16,17,19,20 * * 1-5"])
         with open(os.path.join(ROOT, ".github", "workflows", "master-session.yml")) as f:
             ms = yaml.safe_load(f)
         names = [s.get("name", "") for s in ms["jobs"]["v2"]["steps"]]

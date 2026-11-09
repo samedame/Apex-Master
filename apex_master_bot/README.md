@@ -121,3 +121,7 @@ Each ledger row carries a fingerprint of the settings in force. If you change an
 ## What was not tested
 - The Yahoo live feed (`YahooProvider`): the sandbox this was built in could not install or reach `yfinance`. Run one dry day and compare its bars to your broker before trusting it. Yahoo's 5-minute bars can lag, and entry latency matters (the Apex docs put 1 minute of delay at about -19% of the edge).
 - Real fills and spreads. The 0.15R cost is a proxy; the document's own stress test shows the edge is gone at about +0.30R extra.
+
+### QQQ-first paper shadow
+
+The pre-open workflow records a separate paired decision in `ledger/shadow/YYYY-MM-DD.json`. Run the same phases locally with `python -m apex_master_bot v2-shadow select`, `v2-shadow entry`, `v2-shadow exit`, or `v2-shadow auto` using the same state and ledger directories as the v2 check. The commands enforce the Eastern session windows and record skips. See the [paired test rules](../docs/RESEARCH_VALIDATION.md#prospective-qqq-first-shadow-test) and [quote timing and limitations](../docs/OPTIONS_EXECUTION.md#shadow-entry-and-exit-observations).

@@ -50,6 +50,10 @@ def main(argv=None):
     vq.add_argument("--date"); vq.add_argument("--no-notify", action="store_true")
     vq.add_argument("--no-wait", action="store_true", help="do not wait for 09:31 ET")
     dirs(vq)
+    shadow = sub.add_parser("v2-shadow", help="record paired paper-only QQQ-first observations")
+    shadow.add_argument("phase", choices=("select", "entry", "exit", "auto"))
+    shadow.add_argument("--session", help="expected Eastern session for a delayed dispatch")
+    dirs(shadow)
     vs = sub.add_parser("v2-status", help="one-line Master v2 forward-test summary")
     vs.add_argument("--notify", action="store_true")
     dirs(vs)
@@ -128,6 +132,13 @@ def main(argv=None):
         else:
             n = Notifier()
             print("v2 quotes:", run_quotes(day, YahooChain(tk), a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send, wait=not a.no_wait))
+    elif a.cmd == "v2-shadow":
+        from .shadow import run
+        from .v2 import YahooV2
+        from .v2_quotes import YahooChain
+        provider = YahooV2() if a.phase == "auto" else None
+        print("v2 shadow:", run(a.phase, a.state_dir, a.ledger_dir, YahooChain,
+                                provider=provider, session=a.session))
     elif a.cmd == "v2-status":
         from . import v2
         from .live import Notifier
