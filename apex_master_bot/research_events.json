@@ -1,0 +1,9 @@
+[
+  {"name":"CPI (October)","scheduled_at":"2026-11-10T08:30:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.bls.gov/schedule/2026/11_sched_list.htm"},
+  {"name":"PPI (October)","scheduled_at":"2026-11-13T08:30:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.bls.gov/schedule/2026/11_sched_list.htm"},
+  {"name":"Employment Situation (November)","scheduled_at":"2026-12-04T08:30:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.bls.gov/schedule/2026/12_sched_list.htm"},
+  {"name":"FOMC decision","scheduled_at":"2026-12-09T14:00:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.federalreserve.gov/newsevents/2026-december.htm"},
+  {"name":"FOMC press conference","scheduled_at":"2026-12-09T14:30:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.federalreserve.gov/newsevents/2026-december.htm"},
+  {"name":"CPI (November)","scheduled_at":"2026-12-10T08:30:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.bls.gov/schedule/2026/12_sched_list.htm"},
+  {"name":"PPI (November)","scheduled_at":"2026-12-15T08:30:00-05:00","announced_at":"2026-11-09T22:03:19+00:00","source":"https://www.bls.gov/schedule/2026/12_sched_list.htm"}
+]

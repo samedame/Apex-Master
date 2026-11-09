@@ -44,11 +44,16 @@ def main(argv=None):
     dirs(v)
     vw = sub.add_parser("v2-watchdog", help="Master v2: if today's check never ran, say so and run it; score session days the bot missed")
     vw.add_argument("--date"); vw.add_argument("--data"); vw.add_argument("--no-notify", action="store_true")
+    vw.add_argument("--eod", action="store_true", help="score completed ETF sessions after the close")
     dirs(vw)
-    vq = sub.add_parser("v2-quotes", help="Master v2: on a signal day, log real option quotes just after the open (paper)")
+    vq = sub.add_parser("v2-quotes", help="Master v2: on a signal day, log indicative option quotes just after the open (paper)")
     vq.add_argument("--date"); vq.add_argument("--no-notify", action="store_true")
     vq.add_argument("--no-wait", action="store_true", help="do not wait for 09:31 ET")
     dirs(vq)
+    shadow = sub.add_parser("v2-shadow", help="record paired paper-only QQQ-first observations")
+    shadow.add_argument("phase", choices=("select", "entry", "exit", "auto"))
+    shadow.add_argument("--session", help="expected Eastern session for a delayed dispatch")
+    dirs(shadow)
     vs = sub.add_parser("v2-status", help="one-line Master v2 forward-test summary")
     vs.add_argument("--notify", action="store_true")
     dirs(vs)
@@ -103,8 +108,12 @@ def main(argv=None):
         day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(v2.NY).date()
         prov = v2.CsvV2(a.data) if a.data else v2.YahooV2()
         n = Notifier()
-        res = v2.run_watchdog(day, prov, a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send)
-        print(f"v2 watchdog {day}: ran_today={res['ran_today']} backfilled={res['backfilled']}")
+        notify = (lambda m: print(m + "\n")) if a.no_notify else n.send
+        if a.eod:
+            v2.run_eod(prov, a.state_dir, a.ledger_dir, notify)
+        else:
+            res = v2.run_watchdog(day, prov, a.state_dir, a.ledger_dir, notify)
+            print(f"v2 watchdog {day}: ran_today={res['ran_today']} backfilled={res['backfilled']}")
     elif a.cmd == "v2-quotes":
         import datetime as dt
         from . import v2
@@ -123,6 +132,13 @@ def main(argv=None):
         else:
             n = Notifier()
             print("v2 quotes:", run_quotes(day, YahooChain(tk), a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send, wait=not a.no_wait))
+    elif a.cmd == "v2-shadow":
+        from .shadow import run
+        from .v2 import YahooV2
+        from .v2_quotes import YahooChain
+        provider = YahooV2() if a.phase == "auto" else None
+        print("v2 shadow:", run(a.phase, a.state_dir, a.ledger_dir, YahooChain,
+                                provider=provider, session=a.session))
     elif a.cmd == "v2-status":
         from . import v2
         from .live import Notifier

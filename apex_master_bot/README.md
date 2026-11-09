@@ -17,26 +17,25 @@ Built from `APEX_CHRONOS_MASTER_STRATEGY.md` and the code in `../backtest/`. Eve
 - VIX gate: no trade if the prior-day VIX close is 25 or higher (`master_config.json`). It never fires in the tested sample, so it does not change any tested result (checked by a test).
 
 ## Master v2 alerts (added 2026-11-04, paper alerts only)
-Rule: previous VIX close >= 20 and previous-day IBS < 0.10 for SPY, then QQQ, then IWM (first one wins). Buy at the open, sell at the close, at most one trade a day. Evidence and limits: `../research/master_v2/README.md` (+18.19 bp per trade over 30 years, about 24 trades a year, plan on about half of that, unproven out of sample, option P&L unverified). **It sends no orders.**
+Rule: previous VIX close >= 20 and previous-day IBS < 0.10 for SPY, then QQQ, then IWM (first one wins). Buy at the open, sell at the close, at most one trade a day. Evidence and limits: `../research/master_v2/README.md` (+18.19 bp per trade in the historical ETF replay, about 24 trades a year, prospective and option P&L unverified). **It sends no orders.**
 
-- **When:** a pre-open step at the start of `master-session` (the 09:20 ET run) calls `v2-check`. It uses only the previous session's bars, so there is nothing to watch intraday. A v2 failure never blocks the v1 session.
-- **Alerts:** Discord only when a trade qualifies (ticker, IBS, VIX, sigma, candidate option strikes and their empirical fair values). No-trade days are silent. Any data problem sends a loud `NO DECISION` message with the manual rule. Fridays post a one-line weekly status as a heartbeat.
-- **Data guards:** the previous-session bar must exist for SPY, QQQ, IWM and VIX (no stale data). VIX is cross-checked against FRED VIXCLS; if the two disagree across the 20 gate there is no decision.
-- **Ledger:** `ledger/v2_checks.csv` (every check), `ledger/v2_trades.csv` (paper trades, open to close, net of 2 bp), `state/v2/<date>.json`. Each morning the check first settles earlier signal days from the daily bar, then decides.
-- **Forward-test rules built in:** an alert says PAUSE AND REVIEW if cumulative net return falls below -1,600 bp, and RETIRE if the mean is <= 0 at 40 trades. Do not edit the rule during the test.
+- **Pre-open.** The short v2 job in `master-session` records the original ETF signal and sends a paper decision report on signal or data-failure days. No-trade days remain silent. Any alert completed at or after 09:30 ET is late. The frozen open is always a benchmark.
+- **Data.** Prior session bars must align for all three ETFs and VIX. A reported FRED/Yahoo difference across the VIX gate yields NO DECISION. Missing FRED data is labeled Yahoo-only. Regime and scheduled events are diagnostics.
+- **Quotes.** The separate job samples the Yahoo chain during regular hours. Quote age is unknown. It reports indicative price, costs and risk, with zero contracts authorized. Same-day expiry results use simplified intrinsic marks and omit exit spreads and assignment.
+- **Recovery.** The independent watchdog retries missing decisions, backfills recent missed benchmarks, and recovers missing indicative captures during the session. An after-close pass scores available daily closes. GitHub can delay or coalesce cron runs.
+- **State.** Use a single scheduler and share its state and ledger directories across commands. The v2 workflows serialize their writes by branch. Existing check, trade and quote CSVs remain compatible. New snapshot provenance is in the v2 daily JSON.
 
-**Watchdog (silent days must not hide a dead bot).** `v2-watchdog` runs from its own workflow (`v2-watchdog.yml`, 09:40 ET, independent of the 09:20 dispatch). If today's v2 check is not logged it says so on Discord and runs the check itself (flagged LATE). It also scores any session day the bot missed since the forward test began, so a missed signal still counts and is announced as MISSED SIGNAL. Healthy days are silent. If both the dispatch and GitHub's cron fail, nothing runs; the Friday status line is the backstop.
-
-**Real option quotes on every signal day.** The model-free fair values in the alert are estimates, not prices. On a signal the session dispatches `v2-quotes.yml`, which waits for 09:31 ET, snapshots the same-day (0DTE) chain, builds the three put credit spreads and the call debit spread named in the alert at the strikes the chain actually lists, and posts a QUOTE CHECK: natural fill (sell the bid, buy the ask) versus the empirical fair value, PASS, FAIL, or WIDTH_OFF when the listed strikes are too coarse for the fair value to apply. The fair value is interpolated between the 0.25 and 0.5 sigma widths. Next morning, settlement scores each structure at its intrinsic value at the close, at mid and at the natural fill (`ledger/v2_quotes.csv`, `ledger/v2_quote_results.csv`; summarized in `v2-status`). After about ten signals this shows whether spreads eat the edge. Limits: Yahoo option quotes can be delayed (`snap_et` is when the bot looked), and exits are scored at intrinsic with no exit spread, which flatters the result. Still paper only.
-
+```sh
+# Use scratch state for offline verification. --no-notify still writes state.
+scratch=$(mktemp -d)
+python -m apex_master_bot v2-check --date 2026-11-05 --data ../research/master_v2/data \
+  --no-notify --state-dir "$scratch/state" --ledger-dir "$scratch/ledger"
+python -m apex_master_bot v2-status
+python -m apex_master_bot v2-replay --data ../research/master_v2/data --published ../research/master_v2/results/master_v2_trades.csv
 ```
-python3 -m apex_master_bot v2-watchdog --no-notify                    # what the watchdog would do now
-python3 -m apex_master_bot v2-quotes --no-wait --no-notify            # quote snapshot for today's signal, if any
-python3 -m apex_master_bot v2-check --no-notify                       # decide for today (Yahoo + FRED), print only
-python3 -m apex_master_bot v2-check --date 2026-11-05 --no-notify     # a specific session
-python3 -m apex_master_bot v2-status                                  # forward-test summary
-python3 -m apex_master_bot v2-replay --data ../research/master_v2/data --published ../research/master_v2/results/master_v2_trades.csv
-```
+
+See [paper risk defaults](../docs/RISK_MANAGEMENT.md) and [timestamped option replay](../docs/OPTIONS_EXECUTION.md).
+
 `v2-replay` re-runs the same `decide()` the live check uses over 30 years of daily bars and matches all 734 published trades (a test asserts it). To run it outside GitHub Actions, schedule `v2-check` once each weekday at about 09:15 ET (it needs `pip install yfinance`).
 
 ## Proof it matches the backtest
@@ -109,7 +108,7 @@ updates the scoreboard, commits `state/` and `ledger/` back to the repo, and pos
 6. Run only ONE runner (Actions or the Mac launchd jobs), otherwise both write the same ledger.
 
 Limits: state is committed at the end of the job, so a crash mid-day loses that day's state (the restart rescans and logs late signals as MISSED, it does not chase them).
-The repo is public, so `state/` and `ledger/` are world-readable.
+State and ledger files are accessible to repository readers. Keep account and brokerage credentials out of them.
 
 ## Forward-test scoreboard
 ```
@@ -122,3 +121,7 @@ Each ledger row carries a fingerprint of the settings in force. If you change an
 ## What was not tested
 - The Yahoo live feed (`YahooProvider`): the sandbox this was built in could not install or reach `yfinance`. Run one dry day and compare its bars to your broker before trusting it. Yahoo's 5-minute bars can lag, and entry latency matters (the Apex docs put 1 minute of delay at about -19% of the edge).
 - Real fills and spreads. The 0.15R cost is a proxy; the document's own stress test shows the edge is gone at about +0.30R extra.
+
+### QQQ-first paper shadow
+
+The pre-open workflow records a separate paired decision in `ledger/shadow/YYYY-MM-DD.json`. Run the same phases locally with `python -m apex_master_bot v2-shadow select`, `v2-shadow entry`, `v2-shadow exit`, or `v2-shadow auto` using the same state and ledger directories as the v2 check. The commands enforce the Eastern session windows and record skips. See the [paired test rules](../docs/RESEARCH_VALIDATION.md#prospective-qqq-first-shadow-test) and [quote timing and limitations](../docs/OPTIONS_EXECUTION.md#shadow-entry-and-exit-observations).

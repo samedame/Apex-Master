@@ -4,9 +4,14 @@ name: v2-quotes
 # next to the model-free fair values (ledger/v2_quotes.csv) and posts a QUOTE CHECK to Discord. Paper only: no orders.
 on:
   workflow_dispatch:
+    inputs:
+      session_date:
+        description: "Eastern date of the original signal"
+        type: string
+        required: false
 
 concurrency:
-  group: v2-quotes
+  group: v2-ledger-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -24,6 +29,8 @@ jobs:
         working-directory: apex_master_bot
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -33,7 +40,17 @@ jobs:
         run: pip install "pandas==2.3.3" "numpy==2.2.6" yfinance
 
       - name: Log real option quotes (waits for 09:31 ET)
-        run: python3 -m apex_master_bot v2-quotes --state-dir state --ledger-dir ledger
+        env:
+          SESSION_DATE: ${{ inputs.session_date }}
+        run: |
+          python3 -m apex_master_bot v2-quotes --state-dir state --ledger-dir ledger --date "${SESSION_DATE:-$(TZ=America/New_York date +%F)}"
+
+
+      - name: Capture the shadow entry observation
+        if: always()
+        env:
+          SESSION_DATE: ${{ inputs.session_date }}
+        run: python3 -m apex_master_bot v2-shadow entry --state-dir state --ledger-dir ledger --session "${SESSION_DATE:-$(TZ=America/New_York date +%F)}"
 
       - name: Save quotes back to the repo
         if: always()
@@ -56,5 +73,5 @@ jobs:
         run: |
           [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
           curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
-            -d "{\"content\":\"APEX MASTER v2: the option quote job FAILED. The signal is unaffected; read the live chain by hand and log your fill. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+            -d "{\"content\":\"APEX MASTER v2: the option quote job FAILED. The signal is unaffected; Zero contracts authorized. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
             "$DISCORD_WEBHOOK_URL" || true

@@ -88,6 +88,10 @@ class Watchdog(unittest.TestCase):
             # a second run does not repeat any of it
             sent.clear()
             v2.run_watchdog(DAY, prov, td, td, sent.append, now=at(9, 45))
+            self.assertEqual(len(sent), 1)
+            self.assertIn("ETF benchmark", sent[0])
+            sent.clear()
+            v2.run_watchdog(DAY, prov, td, td, sent.append, now=at(9, 50))
             self.assertEqual(sent, [])
 
     def test_backfilled_signal_is_scored_next_morning(self):
@@ -208,20 +212,22 @@ class Wiring(unittest.TestCase):
         steps = wd["jobs"]["watchdog"]["steps"]
         self.assertTrue(any("v2-watchdog" in s.get("run", "") for s in steps))
         crons = [c["cron"] for c in wd[True]["schedule"]] if True in wd else [c["cron"] for c in wd["on"]["schedule"]]
-        self.assertEqual(crons, ["40 13,14 * * 1-5"])
+        self.assertEqual(crons, ["40 13,14 * * 1-5", "25 20,21 * * 1-5", "48 16,17,19,20 * * 1-5"])
         with open(os.path.join(ROOT, ".github", "workflows", "master-session.yml")) as f:
             ms = yaml.safe_load(f)
-        names = [s.get("name", "") for s in ms["jobs"]["session"]["steps"]]
+        names = [s.get("name", "") for s in ms["jobs"]["v2"]["steps"]]
         i_check = next(i for i, n in enumerate(names) if "v2 pre-open" in n)
         i_save = next(i for i, n in enumerate(names) if "Save v2 check state" in n)
         i_q = next(i for i, n in enumerate(names) if "Dispatch v2 option quote snapshot" in n)
-        i_v1 = next(i for i, n in enumerate(names) if n.startswith("Run today's session"))
-        self.assertTrue(i_check < i_save < i_q < i_v1)
+        self.assertTrue(i_check < i_save < i_q)
+        self.assertEqual(ms["jobs"]["session"]["needs"], "v2")
+        self.assertEqual(ms["jobs"]["v2"]["concurrency"]["group"], wd["concurrency"]["group"])
         self.assertLessEqual(ms["jobs"]["session"]["timeout-minutes"], 360)             # GitHub's hosted-runner limit
         self.assertEqual(ms["permissions"]["actions"], "write")
         with open(os.path.join(ROOT, ".github", "workflows", "v2-quotes.yml")) as f:
             vq = yaml.safe_load(f)
         self.assertTrue(any("v2-quotes" in st.get("run", "") for st in vq["jobs"]["quotes"]["steps"]))
+        self.assertEqual(vq["concurrency"]["group"], wd["concurrency"]["group"])
 
 
 if __name__ == "__main__":

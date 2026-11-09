@@ -27,7 +27,91 @@ permissions:
   actions: write      # lets the session dispatch the v2 quote snapshot workflow on signal days
 
 jobs:
+  v2:
+    concurrency:
+      group: v2-ledger-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    defaults:
+      run:
+        working-directory: apex_master_bot
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pandas==2.3.3" "numpy==2.2.6" yfinance
+      # Master v2 needs only previous-day data, so it runs first, before the open (this job starts 09:20 ET).
+      # No-trade days are silent. continue-on-error: a v2 problem must never block the v1 session.
+      - name: Master v2 pre-open check (paper alert only)
+        id: v2
+        continue-on-error: true
+        run: |
+          python3 -m apex_master_bot v2-check --state-dir state --ledger-dir ledger
+          if [ "$(TZ=America/New_York date +%u)" = "5" ]; then python3 -m apex_master_bot v2-status --ledger-dir ledger --notify; fi
+
+      - name: Record the prospective QQQ-first shadow selection
+        if: always()
+        run: python3 -m apex_master_bot v2-shadow select --state-dir state --ledger-dir ledger
+
+      # Push the v2 decision right away so the independent v2-watchdog workflow can see that today's check ran.
+      - name: Save v2 check state now
+        if: always()
+        id: save_v2
+        working-directory: .
+        run: |
+          git config user.name "apex-master-bot"
+          git config user.email "apex-master-bot@users.noreply.github.com"
+          mkdir -p apex_master_bot/state/v2 apex_master_bot/ledger
+          git add -A apex_master_bot/state/v2 apex_master_bot/ledger
+          if git diff --cached --quiet; then echo "nothing to save"; exit 0; fi
+          git commit -q -m "apex-master v2 check $(TZ=America/New_York date +%F) [skip ci]"
+          for i in 1 2 3 4 5; do
+            git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep $((i * 5))
+          done
+          echo "could not push v2 state after 5 tries"; exit 1
+
+      # Signal days only (about 24 a year): start the separate v2-quotes workflow, which waits for 09:31 ET and logs the real 0DTE
+      # option quotes. It is its own run so the wait cannot eat into this job's 6-hour limit.
+      - name: Dispatch v2 option quote snapshot (signal days only)
+        id: v2q
+        if: steps.save_v2.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          F="state/v2/$(TZ=America/New_York date +%F).json"
+          if [ -f "$F" ] && grep -q '"decision": "TRADE"' "$F"; then
+            gh workflow run v2-quotes.yml --ref "${GITHUB_REF_NAME}" -f session_date="$(TZ=America/New_York date +%F)"
+          else
+            echo "no v2 signal today, nothing to dispatch"
+          fi
+
+      - name: Alert Discord if the v2 check crashed
+        if: steps.v2.outcome == 'failure'
+        run: |
+          [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
+          curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
+            -d "{\"content\":\"APEX MASTER v2: the pre-open check CRASHED, so there is no signal decision today. Zero contracts authorized. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+            "$DISCORD_WEBHOOK_URL" || true
+
+      - name: Alert Discord if the v2 quote snapshot crashed
+        if: steps.v2q.outcome == 'failure'
+        run: |
+          [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
+          curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
+            -d "{\"content\":\"APEX MASTER v2: the option quote snapshot could not be started today. The signal itself is unaffected; Zero contracts authorized. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+            "$DISCORD_WEBHOOK_URL" || true
+
   session:
+    needs: v2
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     # Longest possible day: a P2 signal at 13:29 ET held 100 minutes ends about 15:10 ET (5h50m after a 09:20 start).
     timeout-minutes: 355
@@ -41,6 +125,8 @@ jobs:
         working-directory: apex_master_bot
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -48,63 +134,6 @@ jobs:
 
       - name: Install (versions the backtest replay was verified on)
         run: pip install "pandas==2.3.3" "numpy==2.2.6" yfinance
-
-      # Master v2 needs only previous-day data, so it runs first, before the open (this job starts 09:20 ET).
-      # No-trade days are silent. continue-on-error: a v2 problem must never block the v1 session.
-      - name: Master v2 pre-open check (paper alert only)
-        id: v2
-        continue-on-error: true
-        run: |
-          python3 -m apex_master_bot v2-check --state-dir state --ledger-dir ledger
-          if [ "$(TZ=America/New_York date +%u)" = "5" ]; then python3 -m apex_master_bot v2-status --ledger-dir ledger --notify; fi
-
-      # Push the v2 decision right away so the independent v2-watchdog workflow can see that today's check ran.
-      - name: Save v2 check state now
-        if: always()
-        working-directory: .
-        run: |
-          git config user.name "apex-master-bot"
-          git config user.email "apex-master-bot@users.noreply.github.com"
-          mkdir -p apex_master_bot/state/v2 apex_master_bot/ledger
-          git add -A apex_master_bot/state/v2 apex_master_bot/ledger
-          if git diff --cached --quiet; then echo "nothing to save"; exit 0; fi
-          git commit -q -m "apex-master v2 check $(TZ=America/New_York date +%F) [skip ci]"
-          for i in 1 2 3 4 5; do
-            git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && exit 0
-            sleep $((i * 5))
-          done
-          echo "could not push v2 state after 5 tries"; exit 0
-
-      # Signal days only (about 24 a year): start the separate v2-quotes workflow, which waits for 09:31 ET and logs the real 0DTE
-      # option quotes. It is its own run so the wait cannot eat into this job's 6-hour limit.
-      - name: Dispatch v2 option quote snapshot (signal days only)
-        id: v2q
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          F="apex_master_bot/state/v2/$(TZ=America/New_York date +%F).json"
-          if [ -f "$F" ] && grep -q '"decision": "TRADE"' "$F"; then
-            gh workflow run v2-quotes.yml --ref "${GITHUB_REF_NAME}"
-          else
-            echo "no v2 signal today, nothing to dispatch"
-          fi
-
-      - name: Alert Discord if the v2 check crashed
-        if: steps.v2.outcome == 'failure'
-        run: |
-          [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
-          curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
-            -d "{\"content\":\"APEX MASTER v2: the pre-open check CRASHED, so there is no signal decision today. Check by hand (trade only if prior VIX close >= 20 and an ETF IBS < 0.10, SPY then QQQ then IWM). ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
-            "$DISCORD_WEBHOOK_URL" || true
-
-      - name: Alert Discord if the v2 quote snapshot crashed
-        if: steps.v2q.outcome == 'failure'
-        run: |
-          [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
-          curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
-            -d "{\"content\":\"APEX MASTER v2: the option quote snapshot could not be started today. The signal itself is unaffected; read the live chain by hand and log your fill. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
-            "$DISCORD_WEBHOOK_URL" || true
 
       - name: Run today's session (paper alerts only, no orders)
         id: session
@@ -118,14 +147,14 @@ jobs:
           if [ "$(TZ=America/New_York date +%u)" = "5" ]; then python3 -m apex_master_bot scoreboard --notify; fi
 
       - name: Save state and ledger back to the repo
-        if: always() && (steps.session.outputs.result != 'skip' || steps.v2.outcome != 'skipped')
+        if: always() && (steps.session.outputs.result != 'skip')
         working-directory: .
         run: |
           git config user.name "apex-master-bot"
           git config user.email "apex-master-bot@users.noreply.github.com"
-          git add -A apex_master_bot/state apex_master_bot/ledger
+          git add -A apex_master_bot/state apex_master_bot/ledger ":!apex_master_bot/state/v2" ":!apex_master_bot/ledger/v2_*.csv" ":!apex_master_bot/ledger/shadow"
           if git diff --cached --quiet; then echo "nothing to save"; exit 0; fi
-          git commit -q -m "apex-master $(TZ=America/New_York date +%F) session + v2 check [skip ci]"
+          git commit -q -m "apex-master $(TZ=America/New_York date +%F) v1 session [skip ci]"
           for i in 1 2 3 4 5; do
             git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && exit 0
             sleep $((i * 5))
@@ -137,5 +166,5 @@ jobs:
         run: |
           [ -n "$DISCORD_WEBHOOK_URL" ] || exit 0
           curl -sS -o /dev/null -H "Content-Type: application/json" -A "apex-master-bot" \
-            -d "{\"content\":\"APEX MASTER: the session job FAILED. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} - check for an open position by hand.\"}" \
+            -d "{\"content\":\"APEX MASTER: the session job FAILED. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} - check the paper state.\"}" \
             "$DISCORD_WEBHOOK_URL" || true

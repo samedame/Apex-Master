@@ -9,11 +9,13 @@ rule used by both the live check and the 30-year replay, so the replay test prov
 Each later morning the check also settles earlier signal days into the paper ledger and applies the forward-test
 pause/retire rules.
 """
-import csv, datetime as dt, io, json, math, os, urllib.request
+import datetime as dt, io, json, math, os, urllib.request
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 import pandas as pd
-from .calendar_et import BASE, NY, holidays
+from .calendar_et import BASE, NY, OPEN_T, holidays, session_close
+from .state_io import append_unique, atomic_text, git_revision, ledger_lock
+from .market_regime import Observation, assess_regime, event_calendar, load_events
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,6 @@ class V2Config:
     order: Tuple[str, ...] = ("SPY", "QQQ", "IWM")
     cost_bp: float = 2.0                     # round trip on the underlying, as backtested
     vix_tolerance: float = 0.5               # Yahoo vs FRED VIX close may differ by this much before we call it a conflict
-    late_after: str = "09:35"                # an alert after this time is flagged LATE (entry is the open)
     pause_cum_bp: float = -1600.0            # forward-test plan: pause if cumulative net return falls below this
     retire_at_trades: int = 40               # forward-test plan: retire if the mean is <= 0 at this many trades
     haircut_bp: float = 9.0                  # planning figure: about half of the in-sample +18.19 bp
@@ -45,9 +46,8 @@ class DataError(Exception):
 
 
 def ibs_of(high: float, low: float, close: float) -> Optional[float]:
-    if any(map(lambda x: x is None or (isinstance(x, float) and math.isnan(x)), (high, low, close))):
-        return None
-    if high <= low:
+    if (any(x is None or not math.isfinite(x) for x in (high, low, close))
+            or not 0 < low < high or not low <= close <= high):
         return None
     return (close - low) / (high - low)
 
@@ -125,7 +125,10 @@ class YahooV2:
         self.yf = yf
 
     def daily(self, ticker: str) -> pd.DataFrame:
-        d = self.yf.Ticker(ticker).history(period="2mo", interval="1d", auto_adjust=False)
+        try:
+            d = self.yf.Ticker(ticker).history(period="2mo", interval="1d", auto_adjust=False, timeout=10)
+        except Exception as exc:
+            raise DataError(f"{ticker}: Yahoo fetch failed ({type(exc).__name__})") from exc
         if d is None or d.empty:
             raise DataError(f"no daily bars for {ticker}")
         d.index = pd.to_datetime(d.index).tz_localize(None).normalize()
@@ -192,18 +195,22 @@ def _prior_bar_vix(provider, day: dt.date, cfg: V2Config) -> Tuple[float, str]:
     if v.empty or v.index[-1] != exp:
         raise DataError(f"VIX: last bar is {v.index[-1].date() if len(v) else 'none'}, expected {exp.date()}")
     y = float(v.iloc[-1])
+    if not math.isfinite(y) or y <= 0:
+        raise DataError("invalid prior Yahoo VIX")
     f = provider.fred_vix()
     if f is None or exp not in f.index:
         return y, "Yahoo only (FRED not yet posted)"
     fv = float(f.loc[exp])
+    if not math.isfinite(fv) or fv <= 0:
+        raise DataError("invalid prior FRED VIX")
+    if (fv >= cfg.vix_min) != (y >= cfg.vix_min):
+        raise DataError(f"VIX sources disagree across the gate: Yahoo {y:.2f}, FRED {fv:.2f}")
     if abs(fv - y) > cfg.vix_tolerance:
-        if (fv >= cfg.vix_min) != (y >= cfg.vix_min):
-            raise DataError(f"VIX sources disagree across the gate: Yahoo {y:.2f}, FRED {fv:.2f}")
         return y, f"Yahoo {y:.2f}, FRED {fv:.2f} (differ, same side of the gate)"
     return y, f"Yahoo and FRED agree ({fv:.2f})"
 
 
-def check(day: dt.date, provider, cfg: V2Config = V2) -> dict:
+def check(day: dt.date, provider, cfg: V2Config = V2, diagnostics=None) -> dict:
     """Decision for the session on `day`, from data through the previous session only."""
     if not is_session_day(day):
         return {"day": day.isoformat(), "decision": "CLOSED", "reason": "not a session day"}
@@ -217,7 +224,14 @@ def check(day: dt.date, provider, cfg: V2Config = V2) -> dict:
             raise DataError(f"{t}: last bar is {d.index[-1].date() if len(d) else 'none'}, expected {exp.date()}")
         r = d.iloc[-1]
         ibs[t] = ibs_of(float(r.High), float(r.Low), float(r.Close))
+        if ibs[t] is None:
+            raise DataError(f"{t}: invalid previous-session high/low/close")
+        history = d.Close.tail(20)
+        if diagnostics is not None and len(history) == 20 and all(math.isfinite(x) and x > 0 for x in history):
+            diagnostics[f"{t}_trend20"] = float(history.iloc[-1] / history.mean() - 1)
         bars[t] = {"high": float(r.High), "low": float(r.Low), "close": float(r.Close)}
+    if diagnostics is not None:
+        diagnostics["vix"] = vix
     dec = decide(ibs, vix, cfg)
     out = {"day": day.isoformat(), "decision": "TRADE" if dec["trade"] else "NO_TRADE", "reason": dec["reason"], "vix": vix,
            "vix_source": vsrc, "ibs": ibs, "ticker": dec["ticker"], "prior_session": exp.date().isoformat()}
@@ -230,24 +244,26 @@ def check(day: dt.date, provider, cfg: V2Config = V2) -> dict:
 
 
 def trade_alert(r: dict, late: bool = False, cfg: V2Config = V2) -> str:
-    t, c, s = r["ticker"], r["prior_close"], r["sigma_usd"]
-    lines = [f"APEX MASTER v2 - TRADE SIGNAL (paper only) {r['day']}",
-             f"Buy {t} at the open, sell at the close. One long trade, no stop was tested.",
-             f"Why: {r['reason']}. First of SPY, QQQ, IWM. VIX source: {r['vix_source']}.",
-             f"sigma (VIX-implied daily move) = {r['sigma_pct']:.2f}% = ${s:.2f} on {t} (prior close {c:.2f}).",
-             "Option ideas, strikes from TODAY'S OPEN (prior close used as a proxy; recompute at the open). Take a spread only if the live quote beats the empirical fair value, else trade the shares or skip:"]
-    for k, (win, fair) in PUT_FAIR.items():
-        lines.append(f"- Bull put spread: short about {c - k * s:.0f}, width about {max(1, round(0.25 * s)):.0f}: past win rate {win:.1%}, fair credit {fair:.1%} of width")
-    lines.append(f"- Bull call debit spread: long at the open, width about {max(1, round(0.5 * s)):.0f}: fair debit {CALL_DEBIT_FAIR['long at open, width 0.5 sigma']:.1%} of width")
-    lines.append(f"Backtest 1996-2026: +18.2 bp/trade net of 2 bp, 57% win rate, about 24 trades a year. Plan on about +{cfg.haircut_bp:.0f} bp. Unproven out of sample. Log your real fill.")
-    if late:
-        lines.append(f"LATE: this check ran after {cfg.late_after} ET. The open has passed; the ledger still scores open to close.")
-    return "\n".join(lines)
+    events = ", ".join(f"{e['name']} {e['scheduled_at'][11:16]} ET" for e in r.get("events", []))
+    return "\n".join([
+        f"APEX MASTER — DAILY DECISION | {r['day']} | {r.get('checked_at', 'timestamp unavailable')}",
+        f"Original v2 TRADE SIGNAL — {r['ticker']} | {r['reason']}",
+        f"Prior session {r['prior_session']} | {r['vix_source']}",
+        "Frozen ETF benchmark: long at the open, exit at the close, one entry, no intraday stop.",
+        f"Experimental regime: {r.get('regime', {}).get('state', 'uncertain')} | "
+        f"volatility {r.get('regime', {}).get('volatility', 'unknown')}. No calibrated directional probability.",
+        "Scheduled risk: calendar unavailable." if r.get("event_data_error")
+        else f"Scheduled risk: {events}" if events
+        else "Scheduled risk: no event in the partial calendar for this session.",
+        "ETF replay: 734 trades, +18.19 bp/trade after assumed 2 bp costs. Options evidence unverified.",
+        "LATE — official open is a benchmark only." if late else "Option economics pending a post-open snapshot.",
+        "Final status: PAPER ONLY — benchmark signal. Zero contracts authorized.",
+    ])
 
 
 def data_alert(day: dt.date, err: str) -> str:
-    return (f"APEX MASTER v2 - NO DECISION for {day.isoformat()}: {err}. Check SPY/QQQ/IWM and VIX closes by hand "
-            f"(trade only if prior VIX close >= 20 and an ETF's IBS (close-low)/(high-low) < 0.10, SPY then QQQ then IWM).")
+    return (f"APEX MASTER — DAILY DECISION | {day.isoformat()} | "
+            f"Original v2 NO DECISION | DATA FAILURE — {err}. Zero contracts authorized.")
 
 
 # ---------------------------------------------------------------- ledger, state, settlement
@@ -257,13 +273,8 @@ TRADE_FIELDS = ["day", "ticker", "vix", "ibs", "open", "close", "gross_bp", "net
 
 
 def _append(path: str, fields, row: dict):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        if new:
-            w.writeheader()
-        w.writerow({k: row.get(k, "") for k in fields})
+    key = ("day", "decision") if fields == CHECK_FIELDS else ("day",)
+    return append_unique(path, fields, [row], key)
 
 
 def _jload(path):
@@ -272,8 +283,7 @@ def _jload(path):
 
 
 def _jdump(obj, path):
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=1, default=float)
+    atomic_text(path, json.dumps(obj, indent=1, allow_nan=False) + "\n")
 
 
 def _state_file(state_dir: str, day: str) -> str:
@@ -287,7 +297,7 @@ def _read_trades(ledger_dir: str) -> pd.DataFrame:
     return pd.read_csv(p) if os.path.exists(p) else pd.DataFrame(columns=TRADE_FIELDS)
 
 
-def settle(today: dt.date, provider, state_dir: str, ledger_dir: str, notify, cfg: V2Config = V2) -> list:
+def _settle(today: dt.date, provider, state_dir: str, ledger_dir: str, notify, cfg: V2Config = V2) -> list:
     """Score earlier signal days (paper) from the daily open and close once the bar exists. Returns messages sent."""
     sent = []
     sd = os.path.join(state_dir, "v2")
@@ -304,22 +314,30 @@ def settle(today: dt.date, provider, state_dir: str, ledger_dir: str, notify, cf
         if ts not in d.index:
             continue                                            # bar not posted yet: try again next run
         r = d.loc[ts]
+        if not all(math.isfinite(float(x)) and float(x) > 0 for x in (r.Open, r.Close)):
+            continue
         gross = (float(r.Close) / float(r.Open) - 1) * 1e4
         net = gross - cfg.cost_bp
         tr = _read_trades(ledger_dir)
-        cum, n = float(tr.net_bp.sum()) + net, len(tr) + 1
+        existing = tr[tr.day == st["day"]]
+        cum, n = ((float(tr.net_bp.sum()) + net, len(tr) + 1) if existing.empty
+                  else (float(existing.iloc[0].cum_net_bp), int(existing.iloc[0].n)))
         _append(os.path.join(ledger_dir, "v2_trades.csv"), TRADE_FIELDS,
                 {"day": st["day"], "ticker": st["ticker"], "vix": st["vix"], "ibs": st["ibs"][st["ticker"]], "open": float(r.Open),
                  "close": float(r.Close), "gross_bp": round(gross, 2), "net_bp": round(net, 2), "cum_net_bp": round(cum, 2), "n": n})
         try:
             from .v2_quotes import settle_quotes
-            settle_quotes(st["day"], float(r.Close), ledger_dir)
+            marked = settle_quotes(st["day"], float(r.Close), ledger_dir)
         except Exception as e:                                   # quote scoring must never block settlement
             notify(f"APEX MASTER v2: quote scoring error {type(e).__name__}: {str(e)[:120]}")
+            continue  # the ETF ledger is idempotent, so retry quote settlement next run
         st["settled"] = True
         _jdump(st, os.path.join(sd, fn))
-        msg = (f"APEX MASTER v2 - paper result {st['day']}: {st['ticker']} open {float(r.Open):.2f} -> close {float(r.Close):.2f}, "
+        timing = "missed/late signal" if st.get("late") else "signal"
+        msg = (f"APEX MASTER v2 - ETF benchmark ({timing}, no recorded fill) {st['day']}: {st['ticker']} open {float(r.Open):.2f} -> close {float(r.Close):.2f}, "
                f"{net:+.1f} bp net. Forward test: {n} trades, cumulative {cum:+.0f} bp, mean {cum / n:+.1f} bp.")
+        if marked:
+            msg += f" {marked} option scenarios scored at simplified expiry intrinsic, excluding exit spreads and assignment."
         if cum < cfg.pause_cum_bp:
             msg += f"\nPAUSE AND REVIEW: cumulative {cum:+.0f} bp is below the {cfg.pause_cum_bp:.0f} bp limit from the forward-test plan."
         if n >= cfg.retire_at_trades and cum / n <= 0:
@@ -329,11 +347,14 @@ def settle(today: dt.date, provider, state_dir: str, ledger_dir: str, notify, cf
     return sent
 
 
-def run_check(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, now: Optional[dt.datetime] = None,
+settle = ledger_lock(_settle)
+
+
+def _run_check(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, now: Optional[dt.datetime] = None,
               cfg: V2Config = V2) -> dict:
     """Settle earlier signals, then decide for `day`. Idempotent: a day already decided is not alerted twice."""
     try:
-        settle(day, provider, state_dir, ledger_dir, notify, cfg)
+        _settle(day, provider, state_dir, ledger_dir, notify, cfg)
     except Exception as e:                                       # settlement must never block the decision
         notify(f"APEX MASTER v2: settlement error {type(e).__name__}: {str(e)[:160]}")
     _mark_start(state_dir, day)
@@ -342,28 +363,50 @@ def run_check(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, n
         prev = _jload(sf)
         if prev.get("decision") in ("TRADE", "NO_TRADE", "CLOSED"):
             return prev
-    now = now or dt.datetime.now(NY)
-    late = now.date() == day and now.strftime("%H:%M") > cfg.late_after
+    clock = (lambda: now) if now is not None else (lambda: dt.datetime.now(NY))
+    diagnostics = {}
     try:
-        r = check(day, provider, cfg)
+        r = check(day, provider, cfg, diagnostics=diagnostics)
     except DataError as e:
         r = {"day": day.isoformat(), "decision": "NO_DECISION", "reason": str(e)}
-        notify(data_alert(day, str(e)))
-        _append(os.path.join(ledger_dir, "v2_checks.csv"), CHECK_FIELDS, {**r, "late": int(late)})
+    checked = clock().astimezone(NY)
+    late = checked.date() != day or checked.time() >= OPEN_T
+    provenance = {"checked_at": checked.isoformat(), "strategy_version": "v2",
+                  "commit": git_revision(), "provider": type(provider).__name__}
+    if r["decision"] == "NO_DECISION":
+        r.update(provenance, late=late)
+        added = _append(os.path.join(ledger_dir, "v2_checks.csv"), CHECK_FIELDS, {**r, "late": int(late)})
         _jdump(r, sf)
+        if added:
+            notify(data_alert(day, r["reason"]))
         return r
-    r["late"] = late
-    if r["decision"] == "TRADE":
-        notify(trade_alert(r, late, cfg))
+    if diagnostics:
+        # Receipt time is conservative. Daily feeds do not expose original publication timestamps.
+        r["regime"] = assess_regime(
+            [Observation(name, value, checked, provenance["provider"]) for name, value in diagnostics.items()],
+            as_of=checked,
+        )
+    if checked.date() == day and r["decision"] != "CLOSED":
+        try:
+            r["events"] = event_calendar(load_events(os.path.join(BASE, "research_events.json")),
+                                         as_of=checked, since=dt.datetime.combine(day, dt.time(), tzinfo=NY),
+                                         until=dt.datetime.combine(day, session_close(day), tzinfo=NY))
+        except (OSError, ValueError, TypeError):
+            r["event_data_error"] = True
+    r.update(provenance, late=late)
     if r["decision"] != "CLOSED":
         _append(os.path.join(ledger_dir, "v2_checks.csv"), CHECK_FIELDS,
                 {**r, "ibs_SPY": r.get("ibs", {}).get("SPY"), "ibs_QQQ": r.get("ibs", {}).get("QQQ"), "ibs_IWM": r.get("ibs", {}).get("IWM"),
                  "late": int(late)})
     _jdump(r, sf)
+    if r["decision"] == "TRADE":
+        notify(trade_alert(r, late, cfg))
     return r
 
 
 # ---------------------------------------------------------------- watchdog: a silent day must never hide a dead bot
+
+run_check = ledger_lock(_run_check)
 
 WATCHDOG_AFTER = dt.time(9, 35)              # before this the 09:20 dispatch may still be running; do nothing
 
@@ -389,11 +432,12 @@ def prior_sessions(day: dt.date, n: int) -> list:
     return out
 
 
+@ledger_lock
 def run_watchdog(day: dt.date, provider, state_dir: str, ledger_dir: str, notify, now: Optional[dt.datetime] = None,
                  lookback: int = 10, cfg: V2Config = V2) -> dict:
     """If today's check never ran, say so and run it now (flagged LATE). Also score any earlier session days the bot missed,
     from the start of the forward test, so every signal day counts even if the dispatch failed. Silent when all is well."""
-    now = now or dt.datetime.now(NY)
+    now = (now or dt.datetime.now(NY)).astimezone(NY)
     out = {"ran_today": False, "backfilled": []}
     if now.date() == day and now.time() < WATCHDOG_AFTER:
         return out
@@ -401,32 +445,51 @@ def run_watchdog(day: dt.date, provider, state_dir: str, ledger_dir: str, notify
     if is_session_day(day):
         sf = os.path.join(state_dir, "v2", f"{day.isoformat()}.json")
         ok = os.path.exists(sf) and _jload(sf).get("decision") in ("TRADE", "NO_TRADE")
-        if not ok:
-            notify(f"APEX MASTER v2 WATCHDOG: no v2 check was logged for {day.isoformat()} by {now:%H:%M} ET (the 09:20 run did not happen or failed). Running it now.")
-            run_check(day, provider, state_dir, ledger_dir, notify, now=now, cfg=cfg)
+        if ok:
+            _settle(day, provider, state_dir, ledger_dir, notify, cfg)
+        else:
+            if not os.path.exists(sf):
+                notify(f"APEX MASTER v2 WATCHDOG: no v2 check was logged for {day.isoformat()} by {now:%H:%M} ET (the 09:20 run did not happen or failed). Running it now.")
+            _run_check(day, provider, state_dir, ledger_dir, notify, now=now, cfg=cfg)
             out["ran_today"] = True
             start = start or day
+    else:
+        _settle(day, provider, state_dir, ledger_dir, notify, cfg)
     if start is None:
         return out
     for d in prior_sessions(day, lookback):
         if d < start:
             continue
         sf = os.path.join(state_dir, "v2", f"{d.isoformat()}.json")
-        if os.path.exists(sf):
+        existing = _jload(sf) if os.path.exists(sf) else None
+        if existing and existing.get("decision") != "NO_DECISION":
             continue
         try:
             r = check(d, provider, cfg)
         except DataError as e:
+            if existing:
+                continue
             r = {"day": d.isoformat(), "decision": "NO_DECISION", "reason": f"backfill: {e}"}
-        r.update(late=True, backfilled=True)
-        _jdump(r, sf)
+        r.update(late=True, backfilled=True, checked_at=now.isoformat(), strategy_version="v2",
+                 commit=git_revision(), provider=type(provider).__name__)
         if r["decision"] != "CLOSED":
             _append(os.path.join(ledger_dir, "v2_checks.csv"), CHECK_FIELDS,
                     {**r, "ibs_SPY": r.get("ibs", {}).get("SPY"), "ibs_QQQ": r.get("ibs", {}).get("QQQ"), "ibs_IWM": r.get("ibs", {}).get("IWM"), "late": 1})
+        _jdump(r, sf)
         out["backfilled"].append((d.isoformat(), r["decision"]))
         if r["decision"] == "TRADE":
             notify(f"APEX MASTER v2 WATCHDOG: {d.isoformat()} was a MISSED SIGNAL ({r['ticker']}: {r['reason']}). It is scored on paper next, because every signal day counts in the forward test.")
     return out
+
+
+
+def run_eod(provider, state_dir, ledger_dir, notify, now=None):
+    now = (now or dt.datetime.now(NY)).astimezone(NY)
+    day = now.date()
+    close = dt.datetime.combine(day, session_close(day), tzinfo=NY)
+    if not is_session_day(day) or now < close + dt.timedelta(minutes=20):
+        return []
+    return settle(day + dt.timedelta(days=1), provider, state_dir, ledger_dir, notify)
 
 
 def status(ledger_dir: str, cfg: V2Config = V2) -> str:
