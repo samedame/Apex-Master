@@ -14,5 +14,6 @@
  "prior_close": 733.0,
  "sigma_pct": 1.7751731607909376,
  "sigma_usd": 13.012019268597573,
- "late": false
+ "late": false,
+ "settled": true
 }

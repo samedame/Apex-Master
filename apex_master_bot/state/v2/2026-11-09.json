@@ -1,0 +1,18 @@
+{
+ "day": "2026-11-09",
+ "decision": "TRADE",
+ "reason": "VIX 25.64 >= 20 and SPY IBS 0.093 < 0.1",
+ "vix": 25.639999389648438,
+ "vix_source": "Yahoo only (FRED not yet posted)",
+ "ibs": {
+  "SPY": 0.09304855611551076,
+  "QQQ": 0.20037791843453664,
+  "IWM": 0.7963011366446026
+ },
+ "ticker": "SPY",
+ "prior_session": "2026-11-06",
+ "prior_close": 735.2899780273438,
+ "sigma_pct": 1.615168142877563,
+ "sigma_usd": 11.876169482869091,
+ "late": false
+}
