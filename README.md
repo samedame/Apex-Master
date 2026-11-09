@@ -11,3 +11,7 @@ Apex Chronos MASTER: strategy document, the backtest that produced its numbers, 
 Verify the bot against the published trade logs:
 
     cd apex_master_bot && python3 -m unittest discover -s tests -v
+
+## Paper research and account risk
+
+The $1,500 paper research path retains the frozen v2 ETF benchmark and separates it from option quote diagnostics. The scheduled option snapshot authorizes zero contracts. See the [baseline audit](docs/BASELINE_AUDIT.md), [implementation status](docs/IMPLEMENTATION_CHANGELOG.md), [research results](docs/RESEARCH_VALIDATION.md), [risk configuration](docs/RISK_MANAGEMENT.md), and [option replay schema](docs/OPTIONS_EXECUTION.md).

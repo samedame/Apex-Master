@@ -1,0 +1,9 @@
+# Paper account limits
+
+The default account starts at $1,500. Intended maximum risk is $15 per position and the hard maximum is $30. The day can commit up to $30 at starting equity. The weekly stop is $75 at starting equity. The default correlated-risk cap is $30 and conservatively treats the equity ETFs as one group.
+
+The risk engine takes the minimum of intended risk, hard risk, unused daily risk and unused correlated risk. It rounds per-unit loss and collateral up to cents before floor division. Buying power, settled cash and executable-side size each impose an independent ceiling. A $250 maximum-loss spread gets zero contracts. Account budgets use the contractual maximum loss and assumed fees and adverse execution. Assignment exposure requires separate funding and operational controls.
+
+The pure `Account` and `Limits` dataclasses are the configuration surface. For example, a fixture can use `Limits(entries=1)` or `Limits(correlated=Decimal(".01"))`. Supply updated equity, day-start and week-start equity, settled cash, buying power, entry counts, losses and existing exposure at every assessment. Cash-account inputs count settled cash only. Margin-mode scenarios still cap exposure with cash backing and require explicit spread approval. Actual account permissions depend on the broker and account.
+
+The sizing function accepts defined-risk verticals or cash-funded ETF shares from its callers. There is no naked short or leveraged order route. An integrity failure, stale quote, depleted daily budget or breached loss threshold returns zero. Callers must carry forward committed risk and preserve the day's integrity failure until it is reviewed. The repo has no synced account ledger, automated reservation mechanism or approved second strategy. The scheduled alerts and offline CLI therefore authorize zero contracts. A second entry requires independent evidence and explicit approval and can never be a second v2 entry.

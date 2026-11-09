@@ -80,7 +80,10 @@ class Check(unittest.TestCase):
         self.assertEqual((r["decision"], r["ticker"]), ("TRADE", "SPY"))
         self.assertAlmostEqual(r["sigma_pct"], 25 / 100 / 252 ** 0.5 * 100)
         txt = v2.trade_alert(r)
-        self.assertIn("paper only", txt); self.assertIn("Buy SPY at the open", txt); self.assertIn("Bull put spread", txt)
+        self.assertIn("PAPER ONLY", txt)
+        self.assertIn("TRADE SIGNAL — SPY", txt)
+        self.assertIn("Zero contracts authorized", txt)
+        self.assertIn("benchmark", txt)
 
     def test_calm_market_no_trade(self):
         r = v2.check(DAY, scene(16.6, (0.01, 0.01, 0.01)))
@@ -186,11 +189,10 @@ class Wiring(unittest.TestCase):
         import yaml
         with open(os.path.join(ROOT, ".github", "workflows", "master-session.yml")) as f:
             wf = yaml.safe_load(f)
-        steps = wf["jobs"]["session"]["steps"]
+        steps = wf["jobs"]["v2"]["steps"]
         names = [s.get("name", "") for s in steps]
         i2 = next(i for i, n in enumerate(names) if "v2" in n.lower() and "check" in n.lower())
-        i1 = next(i for i, n in enumerate(names) if n.startswith("Run today's session"))
-        self.assertLess(i2, i1)
+        self.assertEqual(wf["jobs"]["session"]["needs"], "v2")
         self.assertTrue(steps[i2].get("continue-on-error"))
         self.assertIn("v2-check", steps[i2]["run"])
 

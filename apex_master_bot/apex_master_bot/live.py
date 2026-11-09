@@ -7,6 +7,7 @@ The bot never places orders.
 import csv, datetime as dt, json, math, os, sys, time, traceback, urllib.request
 from zoneinfo import ZoneInfo
 import pandas as pd
+from .state_io import atomic_text
 from .calendar_et import BASE, HALF_DAYS
 from .config import TZ, Config, config_hash
 from .data import CsvProvider, YahooProvider, vix_prior_close
@@ -90,13 +91,13 @@ def entry_alert(c, entry, cfg, band, risk_pct, acct):
     stop, tgt = entry - d * sd * cfg.stop_R, entry + d * sd * cfg.target_R
     until = (c["ts"] + BAR * (cfg.max_hold_bars + 1)).strftime("%H:%M")
     side = "LONG (bullish)" if d == 1 else "SHORT (bearish)"
-    size = f"\nSIZE: {risk_pct:g}% of account at risk = {math.floor(acct * risk_pct / 100 / sd)} shares of underlying per 1R" if acct else f"\nSIZE: {risk_pct:g}% of account at risk (R = {_fmt(sd)} per share)"
-    return (f"APEX MASTER ENTRY - {c['ticker']} {c['module']} {side}\n"
+    size = f"\nBENCHMARK SIZE (hypothetical): {risk_pct:g}% of account at risk = {math.floor(acct * risk_pct / 100 / sd)} shares of underlying per 1R" if acct else f"\nSIZE: {risk_pct:g}% of account at risk (R = {_fmt(sd)} per share)"
+    return (f"APEX MASTER v1 PAPER BENCHMARK - {c['ticker']} {c['module']} {side}\n"
             f"Signal bar close {_fmt(c['signal_close'])} @ {c['ts'].strftime('%H:%M')}  |  RVOL {_fmt(c['rvol'])}  |  VIX band {band}\n"
             f"Entry ~{_fmt(entry)} (open of the next 5-min bar)  R = {_fmt(sd)}\n"
             f"STOP: a 5-min bar CLOSING {'below' if d == 1 else 'above'} {_fmt(stop)} (-{cfg.stop_R:g}R, close-based, no resting order)\n"
             f"TARGET: {_fmt(tgt)} (+{cfg.target_R:g}R, bar high/low touch)   TIME EXIT: close of the bar ending {until} ET"
-            f"{size}\nNOTE: levels are on the underlying ETF - that is what was backtested.")
+            f"{size}\nFinal status PAPER ONLY. Historical v1 selection used hindsight. No account allocation authorized.")
 
 
 def _event_days():
@@ -121,8 +122,7 @@ def run_live(cfg: Config, args):
     sp = _state_path(state_dir, day)
     st = json.load(open(sp)) if os.path.exists(sp) else {"scanned": {}, "fired": {}, "trade": None, "done": False}
     def save():
-        with open(sp, "w") as f:
-            json.dump(st, f, indent=1, default=str)
+        atomic_text(sp, json.dumps(st, indent=1, default=str))
     hb_path = os.path.join(state_dir, "heartbeat.json")
     hb = {"errors_in_row": 0, "error": None, "last_bar": None, "restarts": 0}
     if os.path.exists(hb_path):

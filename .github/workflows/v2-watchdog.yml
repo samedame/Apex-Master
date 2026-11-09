@@ -9,9 +9,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "40 13,14 * * 1-5"
+    - cron: "25 20,21 * * 1-5"
 
 concurrency:
-  group: v2-watchdog
+  group: v2-ledger-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -29,6 +30,8 @@ jobs:
         working-directory: apex_master_bot
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -39,7 +42,12 @@ jobs:
 
       - name: v2 watchdog
         id: wd
-        run: python3 -m apex_master_bot v2-watchdog --state-dir state --ledger-dir ledger
+        run: |
+          python3 -m apex_master_bot v2-watchdog --state-dir state --ledger-dir ledger
+          python3 -m apex_master_bot v2-watchdog --eod --state-dir state --ledger-dir ledger
+
+      - name: Recover missing indicative snapshot during regular hours
+        run: python3 -m apex_master_bot v2-quotes --no-wait --state-dir state --ledger-dir ledger
 
       - name: Save state and ledger back to the repo
         if: always()

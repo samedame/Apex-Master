@@ -7,7 +7,7 @@ from .config import TZ
 
 NY = ZoneInfo(TZ)
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../apex_master_bot
-HALF_DAYS = {"2026-11-27", "2026-12-24"}                                  # 13:00 ET closes
+HALF_DAYS = {"2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24"}                                  # 13:00 ET closes
 OPEN_T, CLOSE_T = dt.time(9, 30), dt.time(16, 0)
 
 
@@ -28,3 +28,8 @@ def is_trading_day(d: dt.date) -> bool:
 
 def now_et() -> dt.datetime:
     return dt.datetime.now(NY)
+
+
+def session_close(day: dt.date) -> dt.time:
+    """Regular-session close for a known session, including 13:00 ET half-days."""
+    return dt.time(13) if day.isoformat() in HALF_DAYS else CLOSE_T

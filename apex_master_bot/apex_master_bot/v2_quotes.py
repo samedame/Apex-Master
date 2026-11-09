@@ -1,21 +1,13 @@
-"""Master v2 quote capture: on a signal day, log the REAL option quotes right after the open and score them at the close.
-
-Why: the v2 evidence is on the underlying. The option fair values in the alert are model-free estimates from realized
-open-to-close moves, not market prices. This module measures the gap between the two on every signal day:
-  1. a few minutes after the open it snapshots the same-day (0DTE) chain and builds the structures the alert names;
-  2. it compares the NATURAL fill (sell at bid, buy at ask) with the empirical fair value (the quote gate, informational);
-  3. the next morning, settlement computes each structure's intrinsic P&L at the close, at mid and at the natural fill.
-After about ten signals this shows whether spreads eat the edge. Paper only: the bot never places orders.
-
-Limits, stated plainly: Yahoo option quotes can be delayed, so `snap_et` is when the bot looked, not necessarily the quote
-time. Exits are scored at intrinsic value at the close (no exit spread), which flatters the result a little.
-"""
-import csv, datetime as dt, math, os, time
-from typing import Callable, Dict, List, Optional
+"""Indicative Yahoo chain snapshots alongside timestamped paper execution research."""
+import datetime as dt, math, os, time
+from typing import Callable, List, Optional
 import pandas as pd
-from .calendar_et import NY
-from . import v2
-from .v2 import CALL_DEBIT_FAIR, CALL_DEBIT_FAIR_W100, PUT_FAIR, PUT_FAIR_W50, V2, _jdump, _jload, _state_file
+from .calendar_et import NY, OPEN_T, session_close
+from .options_execution import D
+from .risk import Account, assess
+from .state_io import append_unique, git_revision, ledger_lock
+from .v2 import is_session_day
+from .v2 import CALL_DEBIT_FAIR, CALL_DEBIT_FAIR_W100, PUT_FAIR, PUT_FAIR_W50, _jdump, _jload, _state_file
 
 PUT_WIDTH_SIGMA = 0.25
 CALL_WIDTH_SIGMA = 0.5
@@ -40,19 +32,18 @@ class YahooChain:
     def expiries(self) -> List[str]:
         return list(self.t.options)
 
-    def puts(self, expiry: str) -> pd.DataFrame:
-        return self.t.option_chain(expiry).puts[["strike", "bid", "ask"]]
-
-    def calls(self, expiry: str) -> pd.DataFrame:
-        return self.t.option_chain(expiry).calls[["strike", "bid", "ask"]]
+    source = "Yahoo Finance via yfinance"
+    def tables(self, expiry: str):
+        chain = self.t.option_chain(expiry)
+        return chain.puts, chain.calls
 
     def open_price(self, day: dt.date) -> Optional[float]:
         h = self.t.history(period="1d", interval="1m", prepost=False, auto_adjust=False)
-        if h is None or h.empty:
+        if h is None or h.empty or h.index.tz is None:
             return None
-        idx = pd.to_datetime(h.index)
-        h = h[[i.date() == day for i in idx]]
-        return float(h.Open.iloc[0]) if len(h) else None
+        opening = dt.datetime.combine(day, OPEN_T, tzinfo=NY)
+        rows = h[h.index == opening]
+        return float(rows.Open.iloc[0]) if len(rows) == 1 else None
 
 
 # ---------------------------------------------------------------- structures
@@ -81,7 +72,19 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     for c in ("strike", "bid", "ask"):
         d[c] = pd.to_numeric(d[c], errors="coerce")
-    return d.dropna(subset=["strike"]).fillna({"bid": 0.0, "ask": 0.0}).sort_values("strike").reset_index(drop=True)
+    return d[d.strike.map(math.isfinite) & (d.strike > 0)].drop_duplicates("strike", keep=False).sort_values("strike").reset_index(drop=True)
+
+
+def _valid(leg):
+    bid, ask = leg.bid, leg.ask
+    return (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask
+            and ask - bid <= min(.50, max(.05, (bid + ask) * .125)))
+
+
+def _leg(leg):
+    symbol = leg.get("contractSymbol")
+    return {"symbol": symbol if isinstance(symbol, str) else None, "bid": float(leg.bid),
+            "ask": float(leg.ask), "bid_size": None, "ask_size": None, "quote_at": None}
 
 
 def _row(d: pd.DataFrame, strike: float):
@@ -100,14 +103,16 @@ def put_spread(puts: pd.DataFrame, spot: float, sigma_usd: float, k: float) -> O
         return None
     long = _row(lower, short.strike - PUT_WIDTH_SIGMA * sigma_usd)
     width = float(short.strike - long.strike)
-    if not (short.ask > 0 and long.ask > 0):
+    if not (_valid(short) and _valid(long)):
         return {"structure": f"put_{k:.2f}", "dead": True}
     mid = (short.bid + short.ask) / 2 - (long.bid + long.ask) / 2
     nat = float(short.bid - long.ask)
     ws = width / sigma_usd
+    if not (0 < nat < width and 0 < mid < width):
+        return {"structure": f"put_{k:.2f}", "dead": True, "gate": _gate(False, ws, PUT_W_RANGE)}
     fair = fair_put(k, ws)
     return {"structure": f"put_{k:.2f}", "short_k": float(short.strike), "long_k": float(long.strike), "width": width,
-            "width_sigma": ws, "mid": float(mid), "nat": nat, "mid_pct": float(mid) / width, "nat_pct": nat / width,
+            "short_leg": _leg(short), "long_leg": _leg(long), "width_sigma": ws, "mid": float(mid), "nat": nat, "mid_pct": float(mid) / width, "nat_pct": nat / width,
             "fair_pct": fair, "edge_pts": (nat / width - fair) * 100, "gate": _gate(nat / width >= fair and nat > 0, ws, PUT_W_RANGE)}
 
 
@@ -122,19 +127,23 @@ def call_spread(calls: pd.DataFrame, spot: float, sigma_usd: float) -> Optional[
         return None
     short = _row(upper, long.strike + CALL_WIDTH_SIGMA * sigma_usd)
     width = float(short.strike - long.strike)
-    if not (long.ask > 0 and short.ask > 0):
+    if not (_valid(short) and _valid(long)):
         return {"structure": "call_debit", "dead": True}
     mid = (long.bid + long.ask) / 2 - (short.bid + short.ask) / 2
     nat = float(long.ask - short.bid)                     # pay the ask, sell the bid
     ws = width / sigma_usd
+    if not (0 < nat < width and 0 < mid < width):
+        return {"structure": "call_debit", "dead": True, "gate": _gate(False, ws, CALL_W_RANGE)}
     fair = fair_call(ws)
     return {"structure": "call_debit", "short_k": float(short.strike), "long_k": float(long.strike), "width": width,
-            "width_sigma": ws, "mid": float(mid), "nat": nat, "mid_pct": float(mid) / width, "nat_pct": nat / width,
+            "short_leg": _leg(short), "long_leg": _leg(long), "width_sigma": ws, "mid": float(mid), "nat": nat, "mid_pct": float(mid) / width, "nat_pct": nat / width,
             "fair_pct": fair, "edge_pts": (fair - nat / width) * 100, "gate": _gate(nat / width <= fair, ws, CALL_W_RANGE)}
 
 
 def build_structures(chain, expiry: str, spot: float, sigma_usd: float) -> List[dict]:
-    puts, calls = chain.puts(expiry), chain.calls(expiry)
+    if not all(math.isfinite(x) and x > 0 for x in (spot, sigma_usd)):
+        raise ValueError("invalid open reference or volatility")
+    puts, calls = chain.tables(expiry) if hasattr(chain, "tables") else (chain.puts(expiry), chain.calls(expiry))
     out = [put_spread(puts, spot, sigma_usd, k) for k in PUT_FAIR] + [call_spread(calls, spot, sigma_usd)]
     return [s for s in out if s]
 
@@ -151,32 +160,41 @@ def pnl_at_close(s: dict, close: float, fill: str) -> float:
 
 # ---------------------------------------------------------------- run
 
-def _append(path: str, fields, row: dict):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        if new:
-            w.writeheader()
-        w.writerow({k: row.get(k, "") for k in fields})
+FEES = D("2.60")
+SLIPPAGE = D("2")
 
 
-def quote_message(day: str, ticker: str, spot: float, sigma_usd: float, expiry: str, is0: bool, rows: List[dict], note: str = "") -> str:
-    lines = [f"APEX MASTER v2 - QUOTE CHECK {day} {ticker} (paper): open {spot:.2f}, sigma ${sigma_usd:.2f}, expiry {expiry}{'' if is0 else ' (NOT 0DTE: gate not meaningful)'}. {note}".rstrip()]
-    for s in rows:
-        if s.get("dead"):
-            lines.append(f"- {s['structure']}: no live quote")
+def quote_message(day, ticker, spot, sigma_usd, expiry, is0, rows, note=""):
+    lines = [f"APEX MASTER — DAILY DECISION | {day} | {ticker} | QUOTE CHECK",
+             f"Original v2 TRADE SIGNAL. ETF benchmark open {spot:.2f} → close. Volatility proxy ${sigma_usd:.2f}.",
+             f"{note} | Expiry {expiry}" + ("" if is0 else " (NOT 0DTE, research only)"),
+             "Indicative quotes. Provider bid/ask timestamps and displayed sizes unavailable.",
+             "Experimental regime uncertain. ETF evidence only. No calibrated probability."]
+    for row in rows:
+        if row.get("dead"):
+            lines.append(f"- {row['structure']}: invalid quote or premium")
             continue
-        if s["structure"].startswith("put"):
-            lines.append(f"- Put spread {s['short_k']:.0f}/{s['long_k']:.0f} (width {s['width']:.0f}): natural credit {s['nat']:.2f} = {s['nat_pct']:.1%} of width "
-                         f"vs fair {s['fair_pct']:.1%} -> {s['gate']} ({s['edge_pts']:+.1f} pts)")
-        else:
-            lines.append(f"- Call spread {s['long_k']:.0f}/{s['short_k']:.0f} (width {s['width']:.0f}): natural debit {s['nat']:.2f} = {s['nat_pct']:.1%} of width "
-                         f"vs fair {s['fair_pct']:.1%} -> {s['gate']} ({s['edge_pts']:+.1f} pts)")
-    lines.append("PASS = the natural fill beats the model-free fair value. WIDTH_OFF = listed strikes too coarse for the fair value to apply. Informational: no margin was backtested; exits are not modelled.")
+        loss, profit, decision = _indicative_risk(row)
+        action = "credit" if row["structure"].startswith("put") else "debit"
+        gate = f" | {row['gate']} model comparison" if is0 else ""
+        lines.append(f"- {row['structure']} short/long {row['short_k']:g}/{row['long_k']:g} "
+                     f"${row['nat'] * 100:.2f} {action}{gate}. "
+                     f"Max loss ${loss:.2f}, profit ${profit:.2f}. {decision.reason} ({decision.count} contracts).")
+    lines.extend([f"One-contract costs: ${FEES} fees and ${SLIPPAGE} adverse slippage.",
+                  "Final status: SKIP — zero contracts on the $1,500 paper account. No fill recorded."])
     return "\n".join(lines)
 
 
+def _indicative_risk(row):
+    credit = row["structure"].startswith("put")
+    width, price = D(str(row["width"])), D(str(row["nat"]))
+    cost = FEES + SLIPPAGE
+    loss = (width - price if credit else price) * 100 + cost
+    profit = (price if credit else width - price) * 100 - cost
+    return loss, profit, assess(Account(), loss, loss, 0)
+
+
+@ledger_lock
 def run_quotes(day: dt.date, chain, state_dir: str, ledger_dir: str, notify: Callable[[str], None], now: Optional[dt.datetime] = None,
                sleeper: Callable[[float], None] = time.sleep, attempts: int = 3, retry_s: int = 30, wait: bool = True) -> str:
     """Snapshot real quotes for today's v2 signal. Returns 'no-trade', 'done', 'already', or 'no-quotes'."""
@@ -188,44 +206,82 @@ def run_quotes(day: dt.date, chain, state_dir: str, ledger_dir: str, notify: Cal
         return "no-trade"
     if st.get("quotes_logged"):
         return "already"
-    now = now or dt.datetime.now(NY)
+    clock = (lambda: now) if now is not None else (lambda: dt.datetime.now(NY))
+    if st.get("quote_snapshot"):
+        return _finish_snapshot(st, sf, ledger_dir, notify)
+    now = clock().astimezone(NY)
+    if now.date() != day or not is_session_day(day):
+        return "outside-session"
     if wait and now.date() == day:
         target = dt.datetime.combine(day, SNAP_AFTER, tzinfo=NY)
         secs = (target - now).total_seconds()
         if 0 < secs <= MAX_WAIT_S:
             sleeper(secs)
-            now = target
+            now = max(target, clock().astimezone(NY))
     ticker, vix = st["ticker"], float(st["vix"])
+    close_at = dt.datetime.combine(day, session_close(day), tzinfo=NY)
+    source = getattr(chain, "source", type(chain).__name__)
     for i in range(attempts):
-        spot = chain.open_price(day)
-        if spot is None:
-            if i + 1 < attempts:
-                sleeper(retry_s)
-            continue
-        sigma = spot * vix / 100 / math.sqrt(252)
-        exps = chain.expiries()
-        expiry = day.isoformat() if day.isoformat() in exps else next((e for e in exps if e >= day.isoformat()), None)
-        if expiry is None:
-            break
-        rows = build_structures(chain, expiry, spot, sigma)
-        if any(not s.get("dead") for s in rows):
-            snap = (now if i == 0 else dt.datetime.now(NY)).strftime("%H:%M:%S")
+        if not dt.datetime.combine(day, SNAP_AFTER, tzinfo=NY) <= now < close_at:
+            return "outside-session"
+        try:
+            spot = chain.open_price(day)
+            if spot is None:
+                raise ValueError("opening bar missing")
+            sigma = spot * vix / 100 / math.sqrt(252)
+            expiry = min((e for e in chain.expiries() if e >= day.isoformat()), default=None)
+            rows = build_structures(chain, expiry, spot, sigma) if expiry else []
+        except (ValueError, KeyError, TypeError, RuntimeError, OSError):
+            rows = []
+        captured = max(now, clock().astimezone(NY))
+        if captured >= close_at:
+            return "outside-session"
+        if any(not row.get("dead") for row in rows):
             is0 = expiry == day.isoformat()
-            for s in rows:
-                if s.get("dead"):
+            log_rows = []
+            details = []
+            for row in rows:
+                if row.get("dead"):
+                    details.append(row)
                     continue
-                _append(os.path.join(ledger_dir, "v2_quotes.csv"), QUOTE_FIELDS,
-                        {**s, "day": day.isoformat(), "ticker": ticker, "snap_et": snap, "expiry": expiry, "is_0dte": int(is0),
-                         "spot_open": round(spot, 2), "sigma_usd": round(sigma, 3), "gate": s["gate"] if is0 else "N/A"})
-            st["quotes_logged"] = True
-            _jdump(st, sf)
-            notify(quote_message(day.isoformat(), ticker, spot, sigma, expiry, is0, rows))
-            return "done"
+                log_rows.append({**row, "day": day.isoformat(), "ticker": ticker,
+                                 "snap_et": captured.strftime("%H:%M:%S"), "expiry": expiry, "is_0dte": int(is0),
+                                 "spot_open": round(spot, 2), "sigma_usd": round(sigma, 3),
+                                 "gate": row["gate"] if is0 else "N/A"})
+                loss, profit, risk = _indicative_risk(row)
+                details.append({**row, "max_loss": str(loss), "max_profit": str(profit),
+                                "contracts_allowed": risk.count, "risk_status": risk.reason})
+            if not st.get("quote_snapshot"):
+                st["quote_snapshot"] = {"captured_at": captured.isoformat(), "expiry": expiry,
+                                        "source": source, "indicative": True, "rows": details,
+                                        "underlying": ticker, "spot_open": spot,
+                                        "reference_at": dt.datetime.combine(day, OPEN_T, tzinfo=NY).isoformat(),
+                                        "commit": git_revision(), "strategy_version": "v3-paper",
+                                        "fees": str(FEES), "slippage": str(SLIPPAGE), "ledger_rows": log_rows}
+                _jdump(st, sf)
+            return _finish_snapshot(st, sf, ledger_dir, notify)
         if i + 1 < attempts:
             sleeper(retry_s)
-    notify(f"APEX MASTER v2 - QUOTE CHECK {day.isoformat()} {ticker}: no live option quotes after {attempts} tries (Yahoo may be delayed or the chain empty). "
-           f"Read the live chain by hand and compare with the fair values in the alert; log your fill.")
+            now = max(now, clock().astimezone(NY))
+    if not st.get("quote_failure_alerted"):
+        st["quote_failure_alerted"] = True
+        _jdump(st, sf)
+        notify(f"APEX MASTER v2 | {day} {ticker} | DATA FAILURE: no live option quotes after {attempts} tries. "
+               "ETF benchmark preserved. Zero contracts authorized.")
     return "no-quotes"
+
+
+def _finish_snapshot(st, sf, ledger_dir, notify):
+    snapshot = st["quote_snapshot"]
+    append_unique(os.path.join(ledger_dir, "v2_quotes.csv"), QUOTE_FIELDS, snapshot["ledger_rows"],
+                  ("day", "structure"))
+    st["quotes_logged"] = True
+    _jdump(st, sf)
+    notify(quote_message(st["day"], st["ticker"], snapshot["spot_open"],
+                         snapshot["ledger_rows"][0]["sigma_usd"], snapshot["expiry"],
+                         snapshot["expiry"] == st["day"], snapshot["rows"],
+                         f"Captured {snapshot['captured_at']} ET | {snapshot['source']}"))
+    return "done"
 
 
 # ---------------------------------------------------------------- settlement of the quote log
@@ -236,21 +292,17 @@ def settle_quotes(day: str, close: float, ledger_dir: str) -> int:
     if not os.path.exists(qp):
         return 0
     rp = os.path.join(ledger_dir, "v2_quote_results.csv")
-    done = set()
-    if os.path.exists(rp):
-        done = {(r.day, r.structure) for r in pd.read_csv(rp).itertuples()}
+    if not math.isfinite(close) or close <= 0:
+        return 0
     q = pd.read_csv(qp)
     q = q[(q.day == day) & (q.is_0dte == 1)]
-    n = 0
+    rows = []
     for r in q.itertuples():
-        if (r.day, r.structure) in done:
-            continue
         s = {"structure": r.structure, "short_k": r.short_k, "long_k": r.long_k, "width": r.width, "mid": r.mid, "nat": r.nat}
-        _append(rp, RESULT_FIELDS, {"day": day, "ticker": r.ticker, "structure": r.structure, "close": close,
+        rows.append({"day": day, "ticker": r.ticker, "structure": r.structure, "close": close,
                                     "pnl_mid_pct": round(pnl_at_close(s, close, "mid"), 4), "pnl_nat_pct": round(pnl_at_close(s, close, "nat"), 4),
                                     "gate": r.gate})
-        n += 1
-    return n
+    return append_unique(rp, RESULT_FIELDS, rows, ("day", "structure"))
 
 
 def quote_summary(ledger_dir: str) -> str:
@@ -262,4 +314,4 @@ def quote_summary(ledger_dir: str) -> str:
         return ""
     g = r.groupby("structure").agg(n=("day", "count"), nat=("pnl_nat_pct", "mean"), mid=("pnl_mid_pct", "mean"))
     parts = [f"{s} n={int(x.n)} nat {x.nat:+.1%} mid {x.mid:+.1%}" for s, x in g.iterrows()]
-    return "Option paper results (intrinsic at the close, % of width): " + "; ".join(parts)
+    return "Option paper results (simplified expiry intrinsic, no exit spread or assignment, % of width): " + "; ".join(parts)

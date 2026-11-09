@@ -44,8 +44,9 @@ def main(argv=None):
     dirs(v)
     vw = sub.add_parser("v2-watchdog", help="Master v2: if today's check never ran, say so and run it; score session days the bot missed")
     vw.add_argument("--date"); vw.add_argument("--data"); vw.add_argument("--no-notify", action="store_true")
+    vw.add_argument("--eod", action="store_true", help="score completed ETF sessions after the close")
     dirs(vw)
-    vq = sub.add_parser("v2-quotes", help="Master v2: on a signal day, log real option quotes just after the open (paper)")
+    vq = sub.add_parser("v2-quotes", help="Master v2: on a signal day, log indicative option quotes just after the open (paper)")
     vq.add_argument("--date"); vq.add_argument("--no-notify", action="store_true")
     vq.add_argument("--no-wait", action="store_true", help="do not wait for 09:31 ET")
     dirs(vq)
@@ -103,8 +104,12 @@ def main(argv=None):
         day = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(v2.NY).date()
         prov = v2.CsvV2(a.data) if a.data else v2.YahooV2()
         n = Notifier()
-        res = v2.run_watchdog(day, prov, a.state_dir, a.ledger_dir, (lambda m: print(m + "\n")) if a.no_notify else n.send)
-        print(f"v2 watchdog {day}: ran_today={res['ran_today']} backfilled={res['backfilled']}")
+        notify = (lambda m: print(m + "\n")) if a.no_notify else n.send
+        if a.eod:
+            v2.run_eod(prov, a.state_dir, a.ledger_dir, notify)
+        else:
+            res = v2.run_watchdog(day, prov, a.state_dir, a.ledger_dir, notify)
+            print(f"v2 watchdog {day}: ran_today={res['ran_today']} backfilled={res['backfilled']}")
     elif a.cmd == "v2-quotes":
         import datetime as dt
         from . import v2
