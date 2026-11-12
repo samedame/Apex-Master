@@ -1,0 +1,31 @@
+{
+ "scanned": {
+  "SPY": 6,
+  "QQQ": 6,
+  "IWM": 6
+ },
+ "fired": {
+  "SPY": [
+   "P1C"
+  ],
+  "QQQ": [],
+  "IWM": []
+ },
+ "trade": {
+  "ticker": "SPY",
+  "date": "2026-11-12",
+  "ts": "2026-11-12 10:00:00-05:00",
+  "bar": 6,
+  "minute": 30,
+  "module": "P1C",
+  "direction": -1,
+  "rvol": 1.0414167655963031,
+  "stop_dist": 1.4310006277901786,
+  "signal_close": 756.6699829101562,
+  "entry": 756.719970703125,
+  "band": "NORMAL",
+  "risk_pct": 0.5
+ },
+ "done": true,
+ "outcome": "traded"
+}
