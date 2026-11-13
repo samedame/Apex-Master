@@ -106,12 +106,16 @@ jobs:
             -d "{\"content\":\"APEX MASTER v2: the option quote snapshot could not be started today. The signal itself is unaffected; read the live chain by hand and log your fill. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
             "$DISCORD_WEBHOOK_URL" || true
 
+      # Master v1 (the day-long intraday session) is OFF by default since the 2026-11-04 audit found its live rule flat
+      # (-0.020R, drawdown past its own -8R bar) and fleet scan 2026-11-13 found it burned 86-175 billed minutes a day.
+      # Master v2 above is unaffected. To run v1 again, set the repo variable MASTER_V1_ENABLED to 'true'.
       - name: Run today's session (paper alerts only, no orders)
         id: session
+        if: ${{ vars.MASTER_V1_ENABLED == 'true' }}
         run: python3 -m apex_master_bot ensure --profile "$APEX_PROFILE" --state-dir state --ledger-dir ledger
 
       - name: End-of-day line and scoreboard
-        if: always() && steps.session.outputs.result != 'skip'
+        if: always() && vars.MASTER_V1_ENABLED == 'true' && steps.session.outputs.result != 'skip'
         run: |
           python3 -m apex_master_bot watchdog --eod || true
           python3 -m apex_master_bot scoreboard

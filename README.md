@@ -11,3 +11,7 @@ Apex Chronos MASTER: strategy document, the backtest that produced its numbers, 
 Verify the bot against the published trade logs:
 
     cd apex_master_bot && python3 -m unittest discover -s tests -v
+
+## Master v1 session turned off (2026-11-13)
+
+`master-session` still runs the Master v2 pre-open check, its state save and the quote-snapshot dispatch. The v1 intraday session and its end-of-day scoreboard now need the repository variable `MASTER_V1_ENABLED=true`. Reason: the 2026-11-04 audit found v1's live rule flat (-0.020R, max drawdown past its -8R bar) and the day-long session billed 86-175 minutes a day on a private repo. Set the variable to bring v1 back.
