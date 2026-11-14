@@ -1,8 +1,10 @@
 name: master-session
 
-# Started by the Cloudflare open-scheduler Worker (workflow_dispatch, 09:20 ET). The native cron below is only a
-# DST-safe backup: GitHub's own cron runs hours late on this account. A backup run does nothing if the session
-# already finished today or it is outside 09:10-15:59 ET.
+# Started by the Cloudflare open-scheduler Worker (workflow_dispatch, 09:20 ET). The native cron below is ONE backup
+# line (one trigger per job, 2026-11-13): 14:25 UTC is 09:25 ET in winter and 10:25 ET in summer. GitHub's own cron
+# runs hours late on this account, so it mostly lands after the fact; the v2 check is idempotent (a day already
+# decided is not alerted twice), so a late backup only fills in a day the Worker missed. The 13:25 UTC line was a
+# wrong-season duplicate in winter (one billed run a day on this private repo) and was removed.
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +17,7 @@ on:
         required: false
         default: "manual"
   schedule:
-    - cron: "25 13,14 * * 1-5"
+    - cron: "25 14 * * 1-5"
 
 # One session at a time. A second run waits, then sees the finished state and exits.
 concurrency:
@@ -106,12 +108,16 @@ jobs:
             -d "{\"content\":\"APEX MASTER v2: the option quote snapshot could not be started today. The signal itself is unaffected; read the live chain by hand and log your fill. ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
             "$DISCORD_WEBHOOK_URL" || true
 
+      # Master v1 (the day-long intraday session) is OFF by default since the 2026-11-04 audit found its live rule flat
+      # (-0.020R, drawdown past its own -8R bar) and fleet scan 2026-11-13 found it burned 86-175 billed minutes a day.
+      # Master v2 above is unaffected. To run v1 again, set the repo variable MASTER_V1_ENABLED to 'true'.
       - name: Run today's session (paper alerts only, no orders)
         id: session
+        if: ${{ vars.MASTER_V1_ENABLED == 'true' }}
         run: python3 -m apex_master_bot ensure --profile "$APEX_PROFILE" --state-dir state --ledger-dir ledger
 
       - name: End-of-day line and scoreboard
-        if: always() && steps.session.outputs.result != 'skip'
+        if: always() && vars.MASTER_V1_ENABLED == 'true' && steps.session.outputs.result != 'skip'
         run: |
           python3 -m apex_master_bot watchdog --eod || true
           python3 -m apex_master_bot scoreboard
