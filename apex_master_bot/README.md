@@ -105,7 +105,7 @@ updates the scoreboard, commits `state/` and `ledger/` back to the repo, and pos
 5. **Cloudflare**: add a job to the `open-scheduler` Worker that dispatches `master-session.yml` on `main` of `samedame/Apex-Master`
    at 09:20 ET, weekdays (Cron Triggers must use `MON-FRI` and cover UTC hours 13 and 14). The workflow takes the usual inputs
    `scheduled_for_et` and `trigger`. The Worker's `GH_PAT` must be allowed to dispatch workflows on this repo.
-   A backup native cron (`25 13,14 * * 1-5`) is in the workflow and does nothing if the day is already done.
+   One backup native cron line (`25 14 * * 1-5`) is in the workflow and does nothing if the day is already done.
 6. Run only ONE runner (Actions or the Mac launchd jobs), otherwise both write the same ledger.
 
 Limits: state is committed at the end of the job, so a crash mid-day loses that day's state (the restart rescans and logs late signals as MISSED, it does not chase them).
