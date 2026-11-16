@@ -1,0 +1,15 @@
+{
+ "day": "2026-11-16",
+ "decision": "NO_TRADE",
+ "reason": "VIX 19.30 < 20: calm-market regime, the signal loses money here",
+ "vix": 19.299999237060547,
+ "vix_source": "Yahoo only (FRED not yet posted)",
+ "ibs": {
+  "SPY": 0.5302283833649147,
+  "QQQ": 0.48096183069634396,
+  "IWM": 0.6377766927083334
+ },
+ "ticker": null,
+ "prior_session": "2026-11-13",
+ "late": false
+}
