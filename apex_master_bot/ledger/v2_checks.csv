@@ -5,3 +5,5 @@ day,decision,ticker,vix,vix_source,ibs_SPY,ibs_QQQ,ibs_IWM,reason,late
 2026-11-11,NO_TRADE,,19.459999084472656,Yahoo and FRED agree (19.46),0.695051812602703,0.5546768655209056,0.780700658540503,"VIX 19.46 < 20: calm-market regime, the signal loses money here",1
 2026-11-12,NO_TRADE,,17.489999771118164,Yahoo only (FRED not yet posted),0.6452013923421184,0.567860264671803,0.7187465940054496,"VIX 17.49 < 20: calm-market regime, the signal loses money here",0
 2026-11-16,NO_TRADE,,19.299999237060547,Yahoo only (FRED not yet posted),0.5302283833649147,0.48096183069634396,0.6377766927083334,"VIX 19.30 < 20: calm-market regime, the signal loses money here",0
+2026-11-13,NO_TRADE,,18.700000762939453,Yahoo and FRED agree (18.70),0.368197866048281,0.5661898763549574,0.09615229431830687,"VIX 18.70 < 20: calm-market regime, the signal loses money here",1
+2026-11-10,NO_TRADE,,19.920000076293945,Yahoo and FRED agree (19.92),0.8102856658112951,0.8470180420982292,0.8166193746966829,"VIX 19.92 < 20: calm-market regime, the signal loses money here",1
