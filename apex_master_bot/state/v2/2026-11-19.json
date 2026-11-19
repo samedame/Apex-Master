@@ -1,0 +1,15 @@
+{
+ "day": "2026-11-19",
+ "decision": "NO_TRADE",
+ "reason": "VIX 24.56 >= 20 but no ETF has IBS < 0.1",
+ "vix": 24.559999465942383,
+ "vix_source": "Yahoo only (FRED not yet posted)",
+ "ibs": {
+  "SPY": 0.41162474507138,
+  "QQQ": 0.6625663561698718,
+  "IWM": 0.4988803320771205
+ },
+ "ticker": null,
+ "prior_session": "2026-11-18",
+ "late": false
+}
