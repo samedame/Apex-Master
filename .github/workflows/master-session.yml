@@ -42,6 +42,11 @@ jobs:
       run:
         working-directory: apex_master_bot
     steps:
+      - name: Log capital source
+        env:
+          CAPITAL_VAR: ${{ vars.ACCOUNT_SIZE }}
+        run: |
+          if [ -n "$CAPITAL_VAR" ]; then echo "capital=$CAPITAL_VAR source=repo-variable"; else echo "capital=1500 source=default"; fi
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
